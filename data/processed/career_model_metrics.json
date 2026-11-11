@@ -1,0 +1,1118 @@
+{
+  "dataset": "data/synthetic/career_training_profiles.csv",
+  "provenance": "synthetic development data; not real student outcomes",
+  "random_seed": 20260929,
+  "test_size": 0.2,
+  "cv_folds": 5,
+  "stages": {
+    "10th": {
+      "records": 400,
+      "classes": [
+        "business_finance",
+        "creative_communication",
+        "health_life_sciences",
+        "public_social_research",
+        "technology_engineering"
+      ],
+      "features": [
+        "logical_reasoning",
+        "numerical_reasoning",
+        "verbal_reasoning",
+        "spatial_reasoning",
+        "analytical_reasoning",
+        "problem_solving",
+        "attention_to_detail",
+        "technology",
+        "research",
+        "creativity",
+        "entrepreneurship",
+        "leadership",
+        "healthcare",
+        "business",
+        "social_service",
+        "communication",
+        "design",
+        "innovation",
+        "teamwork",
+        "adaptability",
+        "time_management",
+        "critical_thinking",
+        "presentation",
+        "decision_making",
+        "professionalism",
+        "programming",
+        "python",
+        "javascript",
+        "web_development",
+        "graphic_design",
+        "ui_ux",
+        "electronics",
+        "hardware",
+        "accounting",
+        "finance",
+        "physics",
+        "chemistry",
+        "biology",
+        "mathematics",
+        "computer_science",
+        "english",
+        "accountancy",
+        "business_studies",
+        "economics",
+        "history",
+        "geography",
+        "political_science",
+        "sociology",
+        "stream"
+      ],
+      "results": {
+        "random_forest": {
+          "accuracy": 0.9875,
+          "precision_macro": 0.9866666666666667,
+          "recall_macro": 0.9866666666666667,
+          "f1_macro": 0.9862068965517242,
+          "cv": {
+            "test_accuracy": {
+              "mean": 0.99375,
+              "std": 0.00855816496101822
+            },
+            "test_precision_macro": {
+              "mean": 0.9947899159663866,
+              "std": 0.007189663743262979
+            },
+            "test_recall_macro": {
+              "mean": 0.9926666666666666,
+              "std": 0.010110500592068743
+            },
+            "test_f1_macro": {
+              "mean": 0.9934620037137198,
+              "std": 0.009022729736464239
+            }
+          },
+          "confusion_matrix": [
+            [
+              20,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              18,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              14,
+              1,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              14,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              13
+            ]
+          ],
+          "classification_report": {
+            "business_finance": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 20.0
+            },
+            "creative_communication": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 18.0
+            },
+            "health_life_sciences": {
+              "precision": 1.0,
+              "recall": 0.9333333333333333,
+              "f1-score": 0.9655172413793104,
+              "support": 15.0
+            },
+            "public_social_research": {
+              "precision": 0.9333333333333333,
+              "recall": 1.0,
+              "f1-score": 0.9655172413793104,
+              "support": 14.0
+            },
+            "technology_engineering": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 13.0
+            },
+            "accuracy": 0.9875,
+            "macro avg": {
+              "precision": 0.9866666666666667,
+              "recall": 0.9866666666666667,
+              "f1-score": 0.9862068965517242,
+              "support": 80.0
+            },
+            "weighted avg": {
+              "precision": 0.9883333333333333,
+              "recall": 0.9875,
+              "f1-score": 0.9875,
+              "support": 80.0
+            }
+          }
+        },
+        "xgboost": {
+          "accuracy": 0.975,
+          "precision_macro": 0.9750915750915752,
+          "recall_macro": 0.9703296703296704,
+          "f1_macro": 0.9723299284274894,
+          "cv": {
+            "test_accuracy": {
+              "mean": 0.996875,
+              "std": 0.006987712429686843
+            },
+            "test_precision_macro": {
+              "mean": 0.9971428571428571,
+              "std": 0.006388765649999377
+            },
+            "test_recall_macro": {
+              "mean": 0.9960000000000001,
+              "std": 0.008944271909999118
+            },
+            "test_f1_macro": {
+              "mean": 0.9964132553606238,
+              "std": 0.008020204831578162
+            }
+          },
+          "confusion_matrix": [
+            [
+              20,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              18,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              15,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              13,
+              1
+            ],
+            [
+              1,
+              0,
+              0,
+              0,
+              12
+            ]
+          ],
+          "classification_report": {
+            "business_finance": {
+              "precision": 0.9523809523809523,
+              "recall": 1.0,
+              "f1-score": 0.975609756097561,
+              "support": 20.0
+            },
+            "creative_communication": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 18.0
+            },
+            "health_life_sciences": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 15.0
+            },
+            "public_social_research": {
+              "precision": 1.0,
+              "recall": 0.9285714285714286,
+              "f1-score": 0.9629629629629629,
+              "support": 14.0
+            },
+            "technology_engineering": {
+              "precision": 0.9230769230769231,
+              "recall": 0.9230769230769231,
+              "f1-score": 0.9230769230769231,
+              "support": 13.0
+            },
+            "accuracy": 0.975,
+            "macro avg": {
+              "precision": 0.9750915750915752,
+              "recall": 0.9703296703296704,
+              "f1-score": 0.9723299284274894,
+              "support": 80.0
+            },
+            "weighted avg": {
+              "precision": 0.9755952380952382,
+              "recall": 0.975,
+              "f1-score": 0.9749209575429088,
+              "support": 80.0
+            }
+          }
+        }
+      },
+      "selected_model": "random_forest",
+      "saved_model": "10th_career_model.joblib"
+    },
+    "12th": {
+      "records": 400,
+      "classes": [
+        "business_finance",
+        "creative_communication",
+        "health_life_sciences",
+        "public_social_research",
+        "technology_engineering"
+      ],
+      "features": [
+        "logical_reasoning",
+        "numerical_reasoning",
+        "verbal_reasoning",
+        "spatial_reasoning",
+        "analytical_reasoning",
+        "problem_solving",
+        "attention_to_detail",
+        "technology",
+        "research",
+        "creativity",
+        "entrepreneurship",
+        "leadership",
+        "healthcare",
+        "business",
+        "social_service",
+        "communication",
+        "design",
+        "innovation",
+        "teamwork",
+        "adaptability",
+        "time_management",
+        "critical_thinking",
+        "presentation",
+        "decision_making",
+        "professionalism",
+        "programming",
+        "python",
+        "java",
+        "javascript",
+        "sql",
+        "data_analysis",
+        "web_development",
+        "cybersecurity",
+        "accounting",
+        "finance",
+        "graphic_design",
+        "ui_ux",
+        "electronics",
+        "hardware",
+        "physics",
+        "chemistry",
+        "biology",
+        "mathematics",
+        "computer_science",
+        "english",
+        "accountancy",
+        "business_studies",
+        "economics",
+        "history",
+        "political_science",
+        "sociology",
+        "stream"
+      ],
+      "results": {
+        "random_forest": {
+          "accuracy": 1.0,
+          "precision_macro": 1.0,
+          "recall_macro": 1.0,
+          "f1_macro": 1.0,
+          "cv": {
+            "test_accuracy": {
+              "mean": 1.0,
+              "std": 0.0
+            },
+            "test_precision_macro": {
+              "mean": 1.0,
+              "std": 0.0
+            },
+            "test_recall_macro": {
+              "mean": 1.0,
+              "std": 0.0
+            },
+            "test_f1_macro": {
+              "mean": 1.0,
+              "std": 0.0
+            }
+          },
+          "confusion_matrix": [
+            [
+              17,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              17,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              14,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              16,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              16
+            ]
+          ],
+          "classification_report": {
+            "business_finance": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 17.0
+            },
+            "creative_communication": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 17.0
+            },
+            "health_life_sciences": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 14.0
+            },
+            "public_social_research": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 16.0
+            },
+            "technology_engineering": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 16.0
+            },
+            "accuracy": 1.0,
+            "macro avg": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 80.0
+            },
+            "weighted avg": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 80.0
+            }
+          }
+        },
+        "xgboost": {
+          "accuracy": 0.975,
+          "precision_macro": 0.977124183006536,
+          "recall_macro": 0.975,
+          "f1_macro": 0.9748917748917749,
+          "cv": {
+            "test_accuracy": {
+              "mean": 0.996875,
+              "std": 0.006987712429686843
+            },
+            "test_precision_macro": {
+              "mean": 0.9971428571428571,
+              "std": 0.006388765649999376
+            },
+            "test_recall_macro": {
+              "mean": 0.9966666666666667,
+              "std": 0.007453559924999372
+            },
+            "test_f1_macro": {
+              "mean": 0.9967793880837359,
+              "std": 0.007201507173912399
+            }
+          },
+          "confusion_matrix": [
+            [
+              17,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              17,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              14,
+              0,
+              0
+            ],
+            [
+              0,
+              1,
+              0,
+              14,
+              1
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              16
+            ]
+          ],
+          "classification_report": {
+            "business_finance": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 17.0
+            },
+            "creative_communication": {
+              "precision": 0.9444444444444444,
+              "recall": 1.0,
+              "f1-score": 0.9714285714285714,
+              "support": 17.0
+            },
+            "health_life_sciences": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 14.0
+            },
+            "public_social_research": {
+              "precision": 1.0,
+              "recall": 0.875,
+              "f1-score": 0.9333333333333333,
+              "support": 16.0
+            },
+            "technology_engineering": {
+              "precision": 0.9411764705882353,
+              "recall": 1.0,
+              "f1-score": 0.9696969696969697,
+              "support": 16.0
+            },
+            "accuracy": 0.975,
+            "macro avg": {
+              "precision": 0.977124183006536,
+              "recall": 0.975,
+              "f1-score": 0.9748917748917749,
+              "support": 80.0
+            },
+            "weighted avg": {
+              "precision": 0.9764297385620916,
+              "recall": 0.975,
+              "f1-score": 0.974534632034632,
+              "support": 80.0
+            }
+          }
+        }
+      },
+      "selected_model": "random_forest",
+      "saved_model": "12th_career_model.joblib"
+    },
+    "Bachelor's": {
+      "records": 400,
+      "classes": [
+        "business_finance",
+        "creative_communication",
+        "health_life_sciences",
+        "public_social_research",
+        "technology_engineering"
+      ],
+      "features": [
+        "logical_reasoning",
+        "numerical_reasoning",
+        "verbal_reasoning",
+        "spatial_reasoning",
+        "analytical_reasoning",
+        "problem_solving",
+        "attention_to_detail",
+        "technology",
+        "research",
+        "creativity",
+        "entrepreneurship",
+        "leadership",
+        "healthcare",
+        "business",
+        "social_service",
+        "communication",
+        "design",
+        "innovation",
+        "teamwork",
+        "adaptability",
+        "time_management",
+        "critical_thinking",
+        "presentation",
+        "decision_making",
+        "professionalism",
+        "programming",
+        "python",
+        "java",
+        "javascript",
+        "sql",
+        "data_analysis",
+        "machine_learning",
+        "web_development",
+        "cybersecurity",
+        "cloud_computing",
+        "accounting",
+        "finance",
+        "graphic_design",
+        "ui_ux",
+        "electronics",
+        "hardware",
+        "research_methods",
+        "mathematics",
+        "computer_science",
+        "biology",
+        "chemistry",
+        "accountancy",
+        "economics",
+        "english",
+        "political_science",
+        "stream"
+      ],
+      "results": {
+        "random_forest": {
+          "accuracy": 1.0,
+          "precision_macro": 1.0,
+          "recall_macro": 1.0,
+          "f1_macro": 1.0,
+          "cv": {
+            "test_accuracy": {
+              "mean": 0.996875,
+              "std": 0.006987712429686843
+            },
+            "test_precision_macro": {
+              "mean": 0.9966666666666667,
+              "std": 0.007453559924999372
+            },
+            "test_recall_macro": {
+              "mean": 0.9969230769230769,
+              "std": 0.00688020916153779
+            },
+            "test_f1_macro": {
+              "mean": 0.9966608695652173,
+              "std": 0.007466522637912372
+            }
+          },
+          "confusion_matrix": [
+            [
+              15,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              15,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              17,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              14,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              19
+            ]
+          ],
+          "classification_report": {
+            "business_finance": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 15.0
+            },
+            "creative_communication": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 15.0
+            },
+            "health_life_sciences": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 17.0
+            },
+            "public_social_research": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 14.0
+            },
+            "technology_engineering": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 19.0
+            },
+            "accuracy": 1.0,
+            "macro avg": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 80.0
+            },
+            "weighted avg": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 80.0
+            }
+          }
+        },
+        "xgboost": {
+          "accuracy": 1.0,
+          "precision_macro": 1.0,
+          "recall_macro": 1.0,
+          "f1_macro": 1.0,
+          "cv": {
+            "test_accuracy": {
+              "mean": 1.0,
+              "std": 0.0
+            },
+            "test_precision_macro": {
+              "mean": 1.0,
+              "std": 0.0
+            },
+            "test_recall_macro": {
+              "mean": 1.0,
+              "std": 0.0
+            },
+            "test_f1_macro": {
+              "mean": 1.0,
+              "std": 0.0
+            }
+          },
+          "confusion_matrix": [
+            [
+              15,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              15,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              17,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              14,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              19
+            ]
+          ],
+          "classification_report": {
+            "business_finance": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 15.0
+            },
+            "creative_communication": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 15.0
+            },
+            "health_life_sciences": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 17.0
+            },
+            "public_social_research": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 14.0
+            },
+            "technology_engineering": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 19.0
+            },
+            "accuracy": 1.0,
+            "macro avg": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 80.0
+            },
+            "weighted avg": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 80.0
+            }
+          }
+        }
+      },
+      "selected_model": "random_forest",
+      "saved_model": "bachelors_career_model.joblib"
+    },
+    "Master's": {
+      "records": 400,
+      "classes": [
+        "business_finance",
+        "creative_communication",
+        "health_life_sciences",
+        "public_social_research",
+        "technology_engineering"
+      ],
+      "features": [
+        "logical_reasoning",
+        "numerical_reasoning",
+        "verbal_reasoning",
+        "spatial_reasoning",
+        "analytical_reasoning",
+        "problem_solving",
+        "attention_to_detail",
+        "technology",
+        "research",
+        "creativity",
+        "entrepreneurship",
+        "leadership",
+        "healthcare",
+        "business",
+        "social_service",
+        "communication",
+        "design",
+        "innovation",
+        "teamwork",
+        "adaptability",
+        "time_management",
+        "critical_thinking",
+        "presentation",
+        "decision_making",
+        "professionalism",
+        "programming",
+        "python",
+        "sql",
+        "data_analysis",
+        "machine_learning",
+        "cybersecurity",
+        "cloud_computing",
+        "finance",
+        "ui_ux",
+        "electronics",
+        "hardware",
+        "research_methods",
+        "mathematics",
+        "computer_science",
+        "biology",
+        "chemistry",
+        "economics",
+        "english",
+        "political_science",
+        "stream"
+      ],
+      "results": {
+        "random_forest": {
+          "accuracy": 1.0,
+          "precision_macro": 1.0,
+          "recall_macro": 1.0,
+          "f1_macro": 1.0,
+          "cv": {
+            "test_accuracy": {
+              "mean": 0.996875,
+              "std": 0.006987712429686843
+            },
+            "test_precision_macro": {
+              "mean": 0.9973333333333333,
+              "std": 0.005962847939999428
+            },
+            "test_recall_macro": {
+              "mean": 0.9973333333333333,
+              "std": 0.005962847939999428
+            },
+            "test_f1_macro": {
+              "mean": 0.997241379310345,
+              "std": 0.006168463386206279
+            }
+          },
+          "confusion_matrix": [
+            [
+              15,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              18,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              16,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              14,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              17
+            ]
+          ],
+          "classification_report": {
+            "business_finance": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 15.0
+            },
+            "creative_communication": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 18.0
+            },
+            "health_life_sciences": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 16.0
+            },
+            "public_social_research": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 14.0
+            },
+            "technology_engineering": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 17.0
+            },
+            "accuracy": 1.0,
+            "macro avg": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 80.0
+            },
+            "weighted avg": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 80.0
+            }
+          }
+        },
+        "xgboost": {
+          "accuracy": 1.0,
+          "precision_macro": 1.0,
+          "recall_macro": 1.0,
+          "f1_macro": 1.0,
+          "cv": {
+            "test_accuracy": {
+              "mean": 0.9875,
+              "std": 0.01307281291459493
+            },
+            "test_precision_macro": {
+              "mean": 0.9878095238095238,
+              "std": 0.01263745288495675
+            },
+            "test_recall_macro": {
+              "mean": 0.988065934065934,
+              "std": 0.012536530367215254
+            },
+            "test_f1_macro": {
+              "mean": 0.987461025043034,
+              "std": 0.013067464899836899
+            }
+          },
+          "confusion_matrix": [
+            [
+              15,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              18,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              16,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              14,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              17
+            ]
+          ],
+          "classification_report": {
+            "business_finance": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 15.0
+            },
+            "creative_communication": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 18.0
+            },
+            "health_life_sciences": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 16.0
+            },
+            "public_social_research": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 14.0
+            },
+            "technology_engineering": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 17.0
+            },
+            "accuracy": 1.0,
+            "macro avg": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 80.0
+            },
+            "weighted avg": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "f1-score": 1.0,
+              "support": 80.0
+            }
+          }
+        }
+      },
+      "selected_model": "random_forest",
+      "saved_model": "masters_career_model.joblib"
+    }
+  }
+}

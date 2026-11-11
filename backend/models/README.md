@@ -1,0 +1,1 @@
+The reproducible academic grade-band pipeline is trained into `grade_band_pipeline.joblib` by `python -m backend.ml.train_model`. This pipeline is supplementary and is not used to rank careers. It is checked in with the project alongside the generated evaluation report.

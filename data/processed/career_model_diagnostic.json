@@ -1,0 +1,398 @@
+{
+  "dataset": "data/synthetic/career_training_profiles.csv",
+  "provenance": "synthetic development data; not real student outcomes",
+  "random_seed": 20260929,
+  "test_size": 0.2,
+  "method": "DummyClassifier(strategy='prior') on the same stratified held-out split as the RF/XGBoost comparison",
+  "limitation": "The synthetic target family was generated from family-specific feature archetypes; these scores do not establish real-world career accuracy.",
+  "stages": {
+    "10th": {
+      "records": 400,
+      "classes": [
+        "business_finance",
+        "creative_communication",
+        "health_life_sciences",
+        "public_social_research",
+        "technology_engineering"
+      ],
+      "majority_class": "business_finance",
+      "accuracy": 0.25,
+      "precision_macro": 0.05,
+      "recall_macro": 0.2,
+      "f1_macro": 0.08,
+      "classification_report": {
+        "business_finance": {
+          "precision": 0.25,
+          "recall": 1.0,
+          "f1-score": 0.4,
+          "support": 20.0
+        },
+        "creative_communication": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1-score": 0.0,
+          "support": 18.0
+        },
+        "health_life_sciences": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1-score": 0.0,
+          "support": 15.0
+        },
+        "public_social_research": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1-score": 0.0,
+          "support": 14.0
+        },
+        "technology_engineering": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1-score": 0.0,
+          "support": 13.0
+        },
+        "accuracy": 0.25,
+        "macro avg": {
+          "precision": 0.05,
+          "recall": 0.2,
+          "f1-score": 0.08,
+          "support": 80.0
+        },
+        "weighted avg": {
+          "precision": 0.0625,
+          "recall": 0.25,
+          "f1-score": 0.1,
+          "support": 80.0
+        }
+      },
+      "confusion_matrix": [
+        [
+          20,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          18,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          15,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          14,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          13,
+          0,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    "12th": {
+      "records": 400,
+      "classes": [
+        "business_finance",
+        "creative_communication",
+        "health_life_sciences",
+        "public_social_research",
+        "technology_engineering"
+      ],
+      "majority_class": "business_finance",
+      "accuracy": 0.2125,
+      "precision_macro": 0.042499999999999996,
+      "recall_macro": 0.2,
+      "f1_macro": 0.07010309278350516,
+      "classification_report": {
+        "business_finance": {
+          "precision": 0.2125,
+          "recall": 1.0,
+          "f1-score": 0.35051546391752575,
+          "support": 17.0
+        },
+        "creative_communication": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1-score": 0.0,
+          "support": 17.0
+        },
+        "health_life_sciences": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1-score": 0.0,
+          "support": 14.0
+        },
+        "public_social_research": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1-score": 0.0,
+          "support": 16.0
+        },
+        "technology_engineering": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1-score": 0.0,
+          "support": 16.0
+        },
+        "accuracy": 0.2125,
+        "macro avg": {
+          "precision": 0.042499999999999996,
+          "recall": 0.2,
+          "f1-score": 0.07010309278350516,
+          "support": 80.0
+        },
+        "weighted avg": {
+          "precision": 0.045156249999999995,
+          "recall": 0.2125,
+          "f1-score": 0.07448453608247421,
+          "support": 80.0
+        }
+      },
+      "confusion_matrix": [
+        [
+          17,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          17,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          14,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          16,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          16,
+          0,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    "Bachelor's": {
+      "records": 400,
+      "classes": [
+        "business_finance",
+        "creative_communication",
+        "health_life_sciences",
+        "public_social_research",
+        "technology_engineering"
+      ],
+      "majority_class": "technology_engineering",
+      "accuracy": 0.2375,
+      "precision_macro": 0.0475,
+      "recall_macro": 0.2,
+      "f1_macro": 0.07676767676767676,
+      "classification_report": {
+        "business_finance": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1-score": 0.0,
+          "support": 15.0
+        },
+        "creative_communication": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1-score": 0.0,
+          "support": 15.0
+        },
+        "health_life_sciences": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1-score": 0.0,
+          "support": 17.0
+        },
+        "public_social_research": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1-score": 0.0,
+          "support": 14.0
+        },
+        "technology_engineering": {
+          "precision": 0.2375,
+          "recall": 1.0,
+          "f1-score": 0.3838383838383838,
+          "support": 19.0
+        },
+        "accuracy": 0.2375,
+        "macro avg": {
+          "precision": 0.0475,
+          "recall": 0.2,
+          "f1-score": 0.07676767676767676,
+          "support": 80.0
+        },
+        "weighted avg": {
+          "precision": 0.056406250000000005,
+          "recall": 0.2375,
+          "f1-score": 0.09116161616161615,
+          "support": 80.0
+        }
+      },
+      "confusion_matrix": [
+        [
+          0,
+          0,
+          0,
+          0,
+          15
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          15
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          17
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          14
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          19
+        ]
+      ]
+    },
+    "Master's": {
+      "records": 400,
+      "classes": [
+        "business_finance",
+        "creative_communication",
+        "health_life_sciences",
+        "public_social_research",
+        "technology_engineering"
+      ],
+      "majority_class": "creative_communication",
+      "accuracy": 0.225,
+      "precision_macro": 0.045,
+      "recall_macro": 0.2,
+      "f1_macro": 0.07346938775510205,
+      "classification_report": {
+        "business_finance": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1-score": 0.0,
+          "support": 15.0
+        },
+        "creative_communication": {
+          "precision": 0.225,
+          "recall": 1.0,
+          "f1-score": 0.3673469387755102,
+          "support": 18.0
+        },
+        "health_life_sciences": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1-score": 0.0,
+          "support": 16.0
+        },
+        "public_social_research": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1-score": 0.0,
+          "support": 14.0
+        },
+        "technology_engineering": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1-score": 0.0,
+          "support": 17.0
+        },
+        "accuracy": 0.225,
+        "macro avg": {
+          "precision": 0.045,
+          "recall": 0.2,
+          "f1-score": 0.07346938775510205,
+          "support": 80.0
+        },
+        "weighted avg": {
+          "precision": 0.050624999999999996,
+          "recall": 0.225,
+          "f1-score": 0.0826530612244898,
+          "support": 80.0
+        }
+      },
+      "confusion_matrix": [
+        [
+          0,
+          15,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          18,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          16,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          14,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          17,
+          0,
+          0,
+          0
+        ]
+      ]
+    }
+  }
+}
