@@ -1,9 +1,11 @@
 """Prepare or serve CareerPath from an isolated student-test runtime.
 
 ``prepare`` is a non-server preflight that copies catalogs into a fresh temp
-directory. ``serve`` requires an owner-supplied database hash and runtime ID,
-validates SQLite read-only, then starts Flask on loopback. Neither command
-initializes a database or creates accounts.
+directory. ``serve`` accepts only a fresh, empty student database. ``resume``
+is an explicit opt-in for an already-populated, student-only test database.
+Both serving commands require an owner-supplied database hash and runtime ID,
+validate SQLite read-only, then start Flask on loopback. No command initializes
+a database or creates accounts.
 """
 
 from __future__ import annotations
@@ -30,9 +32,10 @@ RUNTIME_VERSION = 1
 # the current code therefore leaves SQLite's default value (0) in place.
 EXPECTED_SQLITE_COLUMNS = {
     "users": {"user_id": "INTEGER", "email": "TEXT", "password_hash": "TEXT", "token": "TEXT", "role": "TEXT", "is_active": "INTEGER", "created_at": "TEXT"},
-    "students": {"student_id": "TEXT", "user_id": "INTEGER", "education_level": "TEXT", "age": "INTEGER", "gender": "TEXT", "stream": "TEXT", "degree": "TEXT", "specialization": "TEXT", "study_period": "TEXT", "academic_performance": "REAL", "academic_scale": "TEXT", "research_interests": "TEXT", "career_preferences": "TEXT", "profile_updated_at": "TEXT"},
+    "students": {"student_id": "TEXT", "user_id": "INTEGER", "education_level": "TEXT", "age": "INTEGER", "gender": "TEXT", "stream": "TEXT", "degree": "TEXT", "specialization": "TEXT", "study_period": "TEXT", "academic_performance": "REAL", "academic_scale": "TEXT", "research_interests": "TEXT", "career_preferences": "TEXT", "academic_history": "TEXT", "profile_updated_at": "TEXT"},
     "academic_records": {"student_id": "TEXT", "subject_name": "TEXT", "score": "REAL"},
     "assessments": {"student_id": "TEXT", "assessment_type": "TEXT", "feature_name": "TEXT", "score": "REAL"},
+    "student_skill_details": {"student_id": "TEXT", "skill_key": "TEXT", "normalized_name": "TEXT", "display_name": "TEXT", "category": "TEXT", "applicability": "TEXT", "proficiency": "REAL", "source_context": "TEXT", "canonical_skill": "TEXT", "is_custom": "INTEGER"},
     "recommendations": {"student_id": "TEXT", "results_json": "TEXT", "created_at": "TEXT"},
     "aptitude_questions": {"question_id": "TEXT", "domain": "TEXT", "difficulty": "TEXT", "question_text": "TEXT", "options_json": "TEXT", "correct_option": "TEXT", "explanation": "TEXT", "education_levels_json": "TEXT", "is_active": "INTEGER"},
     "aptitude_attempts": {"attempt_id": "INTEGER", "student_id": "TEXT", "status": "TEXT", "started_at": "TEXT", "completed_at": "TEXT", "overall_score": "REAL"},
@@ -55,6 +58,7 @@ EXPECTED_PRIMARY_KEYS = {
     "students": ("student_id",),
     "academic_records": ("student_id", "subject_name"),
     "assessments": ("student_id", "assessment_type", "feature_name"),
+    "student_skill_details": ("student_id", "skill_key"),
     "recommendations": ("student_id",),
     "aptitude_questions": ("question_id",),
     "aptitude_attempts": ("attempt_id",),
@@ -74,6 +78,7 @@ EXPECTED_FOREIGN_KEYS = {
     ("students", (("user_id", "user_id"),), "users", "NO ACTION"),
     ("academic_records", (("student_id", "student_id"),), "students", "CASCADE"),
     ("assessments", (("student_id", "student_id"),), "students", "CASCADE"),
+    ("student_skill_details", (("student_id", "student_id"),), "students", "CASCADE"),
     ("recommendations", (("student_id", "student_id"),), "students", "NO ACTION"),
     ("aptitude_attempts", (("student_id", "student_id"),), "students", "CASCADE"),
     ("aptitude_attempt_questions", (("attempt_id", "attempt_id"),), "aptitude_attempts", "CASCADE"),
@@ -91,6 +96,7 @@ EXPECTED_FOREIGN_KEYS = {
 EXPECTED_UNIQUE_CONSTRAINTS = {
     ("users", ("email",)),
     ("users", ("token",)),
+    ("student_skill_details", ("student_id", "normalized_name")),
     ("students", ("user_id",)),
     ("aptitude_attempt_questions", ("attempt_id", "question_order")),
     ("education_programs", ("education_level", "program_name")),
@@ -101,9 +107,10 @@ EXPECTED_CHECKS = {
     "users": ("check(role in ('student','admin'))",),
     "aptitude_attempts": ("check(status in ('in_progress','completed'))",),
     "education_programs": ("check(program_type in ('stream','degree'))",),
+    "student_skill_details": ("check(category in ('technical','employability'))", "check(applicability in ('not_applicable','assessed'))", "check(proficiency is null or proficiency between 0 and 100)", "check(is_custom in (0,1))"),
 }
 EMPTY_USER_DATA_TABLES = {
-    "users", "students", "academic_records", "assessments", "recommendations",
+    "users", "students", "academic_records", "assessments", "student_skill_details", "recommendations",
     "aptitude_attempts", "aptitude_attempt_questions", "aptitude_responses",
     "aptitude_domain_scores", "recommendation_events", "application_errors",
     "admin_audit_logs",
@@ -306,7 +313,13 @@ def _check_catalog_paths(runtime_root: Path, paths: dict[str, Path], marker: dic
     return snapshot
 
 
-def _validate_readonly_sqlite(database_path: Path, runtime_root: Path, expected_sha256: str) -> None:
+def _validate_readonly_sqlite(
+    database_path: Path,
+    runtime_root: Path,
+    expected_sha256: str,
+    *,
+    allow_existing_test_data: bool = False,
+) -> None:
     if not re_full_sha256(expected_sha256):
         raise IsolationError("An externally recorded 64-character database SHA-256 is required")
     _assert_no_reparse_components(database_path, runtime_root)
@@ -393,20 +406,31 @@ def _validate_readonly_sqlite(database_path: Path, runtime_root: Path, expected_
             if any("".join(check.lower().split()) not in normalized for check in expected_checks):
                 raise IsolationError(f"SQLite CHECK constraints differ from backend/app.py::init_db for table {table}")
 
-        nonempty = {}
-        for table in sorted(EMPTY_USER_DATA_TABLES):
-            count = connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
-            if count:
-                nonempty[table] = count
-        if nonempty:
-            raise IsolationError(f"Refusing pre-existing account/student/event data: {nonempty}")
-        sequence_rows = connection.execute("SELECT name, seq FROM sqlite_sequence").fetchall()
-        prior_user_sequences = {
-            row["name"]: row["seq"] for row in sequence_rows
-            if row["name"] in EMPTY_USER_DATA_SEQUENCE_TABLES
-        }
-        if prior_user_sequences:
-            raise IsolationError(f"Refusing prior account/student/event sequence history: {prior_user_sequences}")
+        if allow_existing_test_data:
+            user_count = connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            student_count = connection.execute("SELECT COUNT(*) FROM students").fetchone()[0]
+            unlinked_student_count = connection.execute("SELECT COUNT(*) FROM students WHERE user_id IS NULL").fetchone()[0]
+            admin_count = connection.execute("SELECT COUNT(*) FROM users WHERE role <> 'student'").fetchone()[0]
+            audit_count = connection.execute("SELECT COUNT(*) FROM admin_audit_logs").fetchone()[0]
+            if user_count < 1 or student_count < 1 or user_count != student_count or unlinked_student_count:
+                raise IsolationError("Resume requires existing student accounts with one matching student profile each")
+            if admin_count or audit_count:
+                raise IsolationError("Resume is limited to student-only test data; administrator records are not permitted")
+        else:
+            nonempty = {}
+            for table in sorted(EMPTY_USER_DATA_TABLES):
+                count = connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+                if count:
+                    nonempty[table] = count
+            if nonempty:
+                raise IsolationError(f"Refusing pre-existing account/student/event data: {nonempty}")
+            sequence_rows = connection.execute("SELECT name, seq FROM sqlite_sequence").fetchall()
+            prior_user_sequences = {
+                row["name"]: row["seq"] for row in sequence_rows
+                if row["name"] in EMPTY_USER_DATA_SEQUENCE_TABLES
+            }
+            if prior_user_sequences:
+                raise IsolationError(f"Refusing prior account/student/event sequence history: {prior_user_sequences}")
         if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
             raise IsolationError("SQLite foreign_key_check found an integrity violation")
     except sqlite3.DatabaseError as exc:
@@ -471,6 +495,8 @@ def _install_sqlite_connection_guard(application, database_path: Path, runtime_r
 
 
 def _configure_and_assert(runtime_root: Path, *, mode: str, expected_runtime_id: str | None = None, expected_database_sha256: str | None = None):
+    if mode not in {"prepare", "serve", "resume"}:
+        raise IsolationError("Unsupported isolated runtime mode")
     runtime_root = _assert_root_is_safe(runtime_root)
     marker = _load_runtime_marker(runtime_root, expected_runtime_id)
     paths = _expected_paths(runtime_root)
@@ -510,10 +536,13 @@ def _configure_and_assert(runtime_root: Path, *, mode: str, expected_runtime_id:
         raise IsolationError("Resolved application database is not the exact isolated SQLite target")
     if mode == "prepare" and paths["database"].exists():
         raise IsolationError("Fresh preflight runtime unexpectedly contains a database file")
-    if mode == "serve":
+    if mode in {"serve", "resume"}:
         if expected_database_sha256 is None:
-            raise IsolationError("Serve requires an owner-recorded database SHA-256 from outside the runtime marker")
-        _validate_readonly_sqlite(paths["database"], runtime_root, expected_database_sha256)
+            raise IsolationError("Serving requires an owner-recorded database SHA-256 from outside the runtime marker")
+        _validate_readonly_sqlite(
+            paths["database"], runtime_root, expected_database_sha256,
+            allow_existing_test_data=(mode == "resume"),
+        )
         _install_sqlite_connection_guard(application, paths["database"], runtime_root)
     else:
         if paths["database"].exists():
@@ -557,19 +586,39 @@ def _command_prepare() -> int:
     return 0
 
 
-def _command_serve(runtime_arg: str, runtime_id: str, expected_database_sha256: str, port: int) -> int:
+def _command_start(runtime_arg: str, runtime_id: str, expected_database_sha256: str, port: int, *, mode: str) -> int:
     runtime_root = Path(runtime_arg).expanduser()
     try:
         application, _, _, _ = _configure_and_assert(
-            runtime_root, mode="serve", expected_runtime_id=runtime_id,
+            runtime_root, mode=mode, expected_runtime_id=runtime_id,
             expected_database_sha256=expected_database_sha256,
         )
     except Exception as exc:
         print(f"ISOLATION SERVER REFUSED: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
+    if mode == "resume":
+        print("Resuming isolated student runtime; existing student data will be preserved")
     print(f"Isolated student runtime serving on http://127.0.0.1:{port}")
     application.app.run(host="127.0.0.1", port=port, debug=False, use_reloader=False)
     return 0
+
+
+def _command_serve(runtime_arg: str, runtime_id: str, expected_database_sha256: str, port: int) -> int:
+    return _command_start(runtime_arg, runtime_id, expected_database_sha256, port, mode="serve")
+
+
+def _command_resume(
+    runtime_arg: str,
+    runtime_id: str,
+    expected_database_sha256: str,
+    port: int,
+    *,
+    confirm_existing_student_data: bool = False,
+) -> int:
+    if not confirm_existing_student_data:
+        print("ISOLATION SERVER REFUSED: explicit confirmation of existing isolated student data is required", file=sys.stderr)
+        return 2
+    return _command_start(runtime_arg, runtime_id, expected_database_sha256, port, mode="resume")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -581,12 +630,28 @@ def main(argv: list[str] | None = None) -> int:
     serve_parser.add_argument("--runtime-id", required=True, help="value printed by prepare; accidental-substitution check, not a secret")
     serve_parser.add_argument("--expected-database-sha256", required=True, help="owner-recorded digest verified outside the mutable runtime marker")
     serve_parser.add_argument("--port", type=int, default=5000)
+    resume_parser = subparsers.add_parser(
+        "resume", help="explicitly resume a validated, student-only isolated runtime with existing test data"
+    )
+    resume_parser.add_argument("--runtime-root", required=True)
+    resume_parser.add_argument("--runtime-id", required=True, help="value printed by prepare; accidental-substitution check, not a secret")
+    resume_parser.add_argument("--expected-database-sha256", required=True, help="current owner-recorded digest, obtained after all writers stop")
+    resume_parser.add_argument(
+        "--confirm-existing-student-data", action="store_true", required=True,
+        help="confirm this is the approved isolated student-test database and its existing records must be preserved",
+    )
+    resume_parser.add_argument("--port", type=int, default=5000)
     args = parser.parse_args(argv)
     if args.command == "prepare":
         return _command_prepare()
     if not 1 <= args.port <= 65535:
         parser.error("--port must be between 1 and 65535")
-    return _command_serve(args.runtime_root, args.runtime_id, args.expected_database_sha256, args.port)
+    if args.command == "serve":
+        return _command_serve(args.runtime_root, args.runtime_id, args.expected_database_sha256, args.port)
+    return _command_resume(
+        args.runtime_root, args.runtime_id, args.expected_database_sha256, args.port,
+        confirm_existing_student_data=args.confirm_existing_student_data,
+    )
 
 
 if __name__ == "__main__":

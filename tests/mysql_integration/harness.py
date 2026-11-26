@@ -28,7 +28,7 @@ REQUIRED_TABLES = {
     "aptitude_questions", "aptitude_attempts", "aptitude_attempt_questions",
     "aptitude_responses", "aptitude_domain_scores", "education_programs",
     "education_specializations", "education_subjects", "education_program_subjects",
-    "education_specialization_subjects", "recommendation_events", "application_errors",
+    "education_specialization_subjects", "student_skill_details", "recommendation_events", "application_errors",
     "admin_audit_logs",
 }
 

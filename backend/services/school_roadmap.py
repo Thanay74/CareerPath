@@ -14,12 +14,6 @@ PATHWAY_ROUTES = {
     "Diploma/Vocational": {"class12": ("Vocational/Diploma",), "career_streams": ("Diploma/Vocational", "Vocational/Diploma")},
 }
 
-_BACHELOR_PREFIXES = ("ba ", "b.a", "bsc", "b.sc", "bcom", "b.com", "bba", "bca", "btech", "b.tech", "be/", "b.e", "b.pharm", "bdes", "b.des", "bachelor")
-
-def _is_undergraduate_program(program):
-    normalized = program.strip().lower()
-    return normalized.startswith(_BACHELOR_PREFIXES)
-
 def _career_options(pathway):
     from backend.services.recommendation_engine import careers
     from backend.services.recommendation_engine import _list
@@ -69,12 +63,11 @@ def build_pathway_roadmap(pathway, profile=None):
         class12 = ("Complete the selected Class 11–12 route and verify any subject prerequisites required by each future course with the relevant institution." if routes else "No matching route is currently available in the maintained Class 12 catalog. Confirm recognized progression routes with your school or counselor.")
     careers = _career_options(pathway)
     career_directions = [{"career_id": item["career_id"], "career_name": item["career_name"], "description": item["description"], "minimum_education_level": item["minimum_education_level"], "degree_options_from_career_record": item["degree_options_from_career_record"], "route_rationale": item["route_rationale"], "qualification_notes": item["qualification_notes"], "qualification_sources": item["qualification_sources"], "source": item["source"], "verify_locally": True} for item in careers]
-    programs = {}
-    for item in careers:
-        for degree in item["degree_options_from_career_record"]:
-            if _is_undergraduate_program(degree):
-                programs.setdefault(degree, set()).add(item["career_name"])
-    post_12_program_options = [{"program_text_from_career_record": degree, "career_directions_in_record": sorted(names), "source": "CareerPath maintained career knowledge base", "verify_locally": True} for degree, names in sorted(programs.items())]
+    # The career catalog links degrees to careers, but does not record which
+    # Class 12 subject combinations make a student eligible for each degree.
+    # A career's suitable_streams field is not degree-specific evidence. Do not
+    # turn that broad relationship into a pathway-specific course list.
+    post_12_program_options = []
     relevant = [key.replace("_", " ") for key, value in (profile.get("interests") or {}).items() if type(value) in (int, float) and value >= 60]
     if not relevant:
         exploration = "Try a small school project, club activity, or introductory task related to this pathway and note what you enjoy."
@@ -92,7 +85,7 @@ def build_pathway_roadmap(pathway, profile=None):
         "stages": [
             {"id": "after_10", "title": "Next steps after Class 10", "summary": after10, "route_choices": [{"route": option["route"], "route_type": "Diploma/vocational route" if option["route"] == "Vocational/Diploma" else "Class 11–12 stream"} for option in stage_options], "prerequisite_checks": ["Confirm the relevant board's eligibility rules and subject availability with your school.", "Compare the exact syllabus and any entry conditions before selecting a program."], "skills_to_explore": list(PATHWAY_RULES_FOR_ROADMAP[pathway]), "activities": [exploration], "conversations": ["Discuss your subject strengths, interests, and questions with a teacher, guardian, or counselor."]},
             {"id": "class_11_12_or_equivalent", "title": "Class 11–12 or a recognized equivalent route", "summary": class12, "catalog_status": catalog_status, "catalog_subjects": subjects, "route_options": stage_options, "prerequisite_checks": ["Verify subject prerequisites and progression with the specific school or recognized program; CareerPath does not determine eligibility."], "skills_to_explore": list(PATHWAY_RULES_FOR_ROADMAP[pathway]), "activities": [exploration], "conversations": ["Review progress and subject choices with a teacher or counselor before changing routes."]},
-            {"id": "after_12", "title": "Options after Class 12 or equivalent", "summary": "Undergraduate program names below are copied from pathway-linked CareerPath records. The catalog does not establish eligibility or prerequisites; confirm current entry requirements with each institution.", "program_options": post_12_program_options, "prerequisite_checks": ["For each course, check the current official admission notice, subject prerequisites, entrance tests, and recognition."], "activities": ["Compare course syllabi and speak with a counselor or course provider before applying."], "conversations": ["Ask a counselor to help compare the prerequisites for two or three options that interest you."]},
+            {"id": "after_12", "title": "Options after Class 12 or equivalent", "summary": "The maintained career records list longer-term degree directions, but do not connect individual undergraduate courses to Class 12 subject prerequisites for this pathway. CareerPath therefore does not present a course here as eligible or pathway-approved. Review longer-term directions in Stage 4 and confirm course entry requirements with official institutions.", "program_options": post_12_program_options, "prerequisite_checks": ["For each course you consider, check the current official admission notice, required subjects, entrance tests, and recognition with the institution or regulator."], "activities": ["Compare official course syllabi and speak with a school counselor or course provider before applying."], "conversations": ["Ask a counselor to help compare the prerequisites for two or three options that interest you."]},
             {"id": "further_study_and_careers", "title": "Longer-term degrees, further study, and career progression", "summary": "Career directions and minimum study stages below are copied from maintained CareerPath career records. Where a record lists additional qualifications or references, use them to plan further study; verify all current rules with official institutions.", "career_directions": career_directions, "prerequisite_checks": ["Where a career record includes qualification notes or official references, read them and verify the latest rules with the responsible regulator or institution."], "activities": ["Explore a beginner-friendly project or age-appropriate career conversation where available."], "conversations": ["Discuss longer-term study and career options with a qualified counselor; keep more than one route open."]},
         ],
         "unavailable_assessment": profile.get("skill_gap_message") if profile.get("skill_gap_status") in ("insufficient_data", "insufficient_requirements") else None,

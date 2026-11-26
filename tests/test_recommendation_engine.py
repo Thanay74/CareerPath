@@ -4,6 +4,27 @@ from backend.services.recommendation_engine import recommend,skill_gaps,career_d
 ROOT=Path(__file__).parent
 PROFILES=json.loads((ROOT/'sample_profiles.json').read_text(encoding='utf-8'))
 class RecommendationTests(unittest.TestCase):
+    def test_broad_model_family_does_not_create_an_unrelated_degree_route(self):
+        from backend.services.recommendation_engine import _degree_score
+        from backend.services.recommendation_engine import career_detail
+
+        profile={
+            'education_level':"Master's",'stream':'Computing','degree':'MCA',
+            'specialization':'Cybersecurity','subjects':{},'aptitude':{},
+            'interests':{'cybersecurity':90},'technical':{'cybersecurity':80},
+            'employability':{},'career_preferences':'cybersecurity',
+        }
+        civil=career_detail('C09')
+        cybersecurity=career_detail('C04')
+        self.assertEqual(_degree_score(profile,civil),12)
+        self.assertEqual(_degree_score(profile,cybersecurity),72)
+
+        results=recommend(profile,5)
+        self.assertNotIn('C09',{item['career_id'] for item in results})
+        cyber_result=next(item for item in results if item['career_id']=='C04')
+        self.assertEqual(cyber_result['qualification_status'],'Related direction; eligibility not verified')
+        self.assertIn('not an institution-specific eligibility decision',cyber_result['additional_qualifications'])
+
     def test_school_pathway_guidance_is_evidence_sensitive(self):
         from backend.services.recommendation_engine import recommend
         science = recommend({'education_level':'10th','subjects':{'mathematics':92,'science':94},'interests':{'technology':95,'research':85},'aptitude':{'analytical_reasoning':88},'career_preferences':''},4)
@@ -36,20 +57,25 @@ class RecommendationTests(unittest.TestCase):
         self.assertEqual(commerce['stages'][1]['route_options'][0]['route'],'Commerce')
         self.assertEqual(arts['stages'][1]['route_options'][0]['route'],'Arts/Humanities')
         self.assertEqual(vocational['stages'][1]['route_options'][0]['route'],'Vocational/Diploma')
-        self.assertTrue(science['stages'][2]['program_options'])
+        self.assertEqual(science['stages'][2]['program_options'], [])
+        self.assertIn('do not connect individual undergraduate courses to Class 12 subject prerequisites',science['stages'][2]['summary'])
         self.assertTrue(science['stages'][3]['career_directions'])
         self.assertTrue(all(x['verify_locally'] for x in science['stages'][3]['career_directions']))
         self.assertIn('maintained career',science['source_note'])
         self.assertFalse(any('career_directions' in stage for stage in commerce['stages'] if stage['id']=='after_12'))
-        stage_three_ids=[(x['program_text_from_career_record'],name) for x in commerce['stages'][2]['program_options'] for name in x['career_directions_in_record']]
         stage_four_ids=[x['career_name'] for x in commerce['stages'][3]['career_directions']]
         self.assertEqual(len(stage_four_ids),len(set(stage_four_ids)))
-        self.assertTrue(all(name in stage_four_ids for _,name in stage_three_ids))
         tech=next(x for x in commerce['stages'][3]['career_directions'] if x['career_id']=='C01')
         self.assertIn('longer-term',tech['route_rationale'])
         self.assertIn('Commerce',tech['route_rationale'])
-        bca=next(x for x in commerce['stages'][2]['program_options'] if x['program_text_from_career_record']=='BCA')
-        self.assertIn('Software Developer',bca['career_directions_in_record'])
+
+    def test_class10_stage_three_never_lists_unverified_degrees_as_pathway_eligible(self):
+        from backend.services.school_roadmap import build_pathway_roadmap
+        for pathway in ('Science','Commerce','Arts/Humanities','Diploma/Vocational'):
+            with self.subTest(pathway=pathway):
+                stage=build_pathway_roadmap(pathway)['stages'][2]
+                self.assertEqual(stage['program_options'], [])
+                self.assertIn('do not connect individual undergraduate courses',stage['summary'])
 
     def test_roadmap_reports_missing_class12_catalog_route(self):
         from unittest.mock import patch
@@ -89,13 +115,14 @@ class RecommendationTests(unittest.TestCase):
             if result['knowledge_score'] is not None and result['ml_score'] is not None:
                 self.assertAlmostEqual(result['combined_score'],round(.9*result['knowledge_score']+.1*result['ml_score'],1))
 
-    def test_degree_profile_uses_curated_degree_mapping(self):
+    def test_degree_route_is_context_not_personalized_compatibility_evidence(self):
         from backend.services.recommendation_engine import _profile_score, career_detail
         career=career_detail('C01')
         base={'education_level':"Bachelor's",'stream':'Science','subjects':{'mathematics':75,'computer_science':75},'aptitude':{},'interests':{},'technical':{},'employability':{}}
         bca={**base,'degree':'BCA','specialization':'Software Development'}
         commerce={**base,'degree':'B.Com','specialization':'Finance'}
-        self.assertGreater(_profile_score(bca,career)[0],_profile_score(commerce,career)[0])
+        self.assertEqual(_profile_score(bca,career)[0],_profile_score(commerce,career)[0])
+        self.assertNotEqual(_profile_score(bca,career)[1]['degree'],_profile_score(commerce,career)[1]['degree'])
     def test_career_preferences_change_knowledge_compatibility(self):
         from backend.services.recommendation_engine import _profile_score
         career=career_detail('C01')
@@ -130,8 +157,96 @@ class RecommendationTests(unittest.TestCase):
         result=skill_gap_analysis({'technical':{'python':90}},{'technical_skills':'','employability_skills':''})
         self.assertEqual(result['status'],'insufficient_requirements')
         self.assertEqual(result['gaps'],[])
+    def test_skill_applicability_custom_matching_and_duplicate_evidence(self):
+        from backend.services.recommendation_engine import _profile_score
+        from backend.skill_catalog import career_skill_guidance
+        developer=career_detail('C01'); ca=career_detail('C14')
+        base={'education_level':"Bachelor's",'stream':'Commerce','subjects':{},'aptitude':{},'interests':{},'technical':{},'employability':{}}
+        unassessed=_profile_score(base,developer)[0]
+        not_applicable={**base,'technical':{'python':0},'skill_assessments':[{'display_name':'Python','category':'technical','applicability':'not_applicable'}]}
+        self.assertEqual(_profile_score(not_applicable,developer)[0],unassessed)
+        explicit_zero_score,explicit_zero_parts=_profile_score({**base,'technical':{'python':0}},developer)
+        self.assertEqual(explicit_zero_parts['technical'],0)
+        self.assertIsNone(_profile_score(base,developer)[1]['technical'])
+        self.assertEqual(explicit_zero_score,unassessed)  # published result stays provisional until the evidence threshold is met
+        custom={**base,'skill_assessments':[{'display_name':'Python programming','category':'technical','applicability':'assessed','proficiency':80,'is_custom':True}]}
+        custom_score,custom_parts=_profile_score(custom,developer)
+        self.assertIsNone(_profile_score(base,developer)[1]['technical'])
+        self.assertEqual(custom_parts['technical'],100)
+        duplicate={**custom,'technical':{'python':50}}
+        single={**base,'technical':{'python':50}}
+        self.assertEqual(_profile_score(duplicate,developer)[0],_profile_score(single,developer)[0])
+        self.assertEqual(_profile_score(custom,ca)[0],_profile_score(base,ca)[0])
+        unmatched={**base,'skill_assessments':[{'display_name':'TallyPrime','category':'technical','applicability':'assessed','proficiency':100,'is_custom':True}]}
+        self.assertEqual(_profile_score(unmatched,developer)[0],unassessed)
+        from backend.services.eligibility import assess_eligibility
+        self.assertEqual(assess_eligibility(custom,developer),assess_eligibility(base,developer))
+        guidance=career_skill_guidance('C01',{'python':55,'sql':45},{})
+        self.assertEqual(guidance['python']['classification'],'core')
+        self.assertEqual(guidance['sql']['classification'],'optional')
+        self.assertTrue(all(item['trainable'] for item in guidance.values()))
+
+    def test_technical_skills_do_not_enter_stage_wide_ml_signal(self):
+        from unittest.mock import patch
+        from backend.services.recommendation_engine import recommend
+        captured={}
+        def predict(profile):
+            captured.update(profile)
+            from backend.ml.artifact_contract import ModelInferenceError
+            raise ModelInferenceError('test signal unavailable')
+        with patch('backend.ml.predict.predict_career_families',side_effect=predict):
+            recommend({'education_level':"Bachelor's",'stream':'Commerce','subjects':{},'aptitude':{},'interests':{},'technical':{'python':100},'employability':{'communication':100}},1)
+        self.assertEqual(captured['technical'],{})
+        self.assertEqual(captured['employability'],{})
     def test_missing_stream_is_neutral_and_not_claimed_as_a_match(self):
         result=recommend({'education_level':"Bachelor's",'subjects':{},'aptitude':{},'interests':{},'technical':{},'employability':{}})[0]
         self.assertEqual(result['components']['stream'],60)
+        self.assertEqual(result['recommendation_type'],'provisional')
+        self.assertIsNone(result['combined_score'])
         self.assertFalse(any('aligned study stream' in reason for reason in result['why_matches']))
+
+    def test_sparse_profile_is_provisional_and_stage_stream_or_degree_do_not_raise_score(self):
+        from backend.services.recommendation_engine import recommend
+        sparse=recommend({'education_level':"Bachelor's",'stream':'Science','degree':'BCA',
+            'subjects':{},'aptitude':{},'interests':{},'technical':{},'employability':{}},5)
+        self.assertTrue(sparse)
+        self.assertTrue(all(item['recommendation_type']=='provisional' for item in sparse))
+        self.assertTrue(all(item['combined_score'] is None and item['knowledge_score'] is None for item in sparse))
+        self.assertTrue(all(item['ml_family_probability'] is None and item['ml_family_probabilities'] is None for item in sparse))
+        self.assertTrue(all(item['evidence_coverage']['status']=='insufficient' for item in sparse))
+        self.assertTrue(all(item['context']['education_stage']['student_stage']=="Bachelor's" for item in sparse))
+
+    def test_two_assessed_dimensions_allow_personalized_score_across_education_stages(self):
+        for key,profile in PROFILES.items():
+            with self.subTest(profile=key):
+                result=recommend(profile,1)[0]
+                self.assertEqual(result['recommendation_type'],'personalized')
+                self.assertGreaterEqual(result['evidence_coverage']['assessed_dimensions'],2)
+                self.assertGreaterEqual(result['evidence_coverage']['input_count'],2)
+                self.assertIsNotNone(result['combined_score'])
+
+    def test_selected_class10_pathway_alone_is_context_not_a_personal_match(self):
+        from backend.services.school_pathways import evaluate_pathway
+        from backend.services.school_pathways import summarize_pathways, PATHWAY_RULES
+        results=[]
+        for pathway in PATHWAY_RULES:
+            result=evaluate_pathway({'education_level':'10th','stream':pathway,'subjects':{},'aptitude':{},'interests':{}},pathway)
+            results.append({**result,'career_id':pathway,'career_name':pathway+' stream/pathway','pathway_name':pathway})
+        compared=summarize_pathways(results)
+        self.assertTrue(all(item['combined_score'] is None for item in compared))
+        self.assertTrue(all(item['recommendation_type']=='provisional' for item in compared))
+        self.assertTrue(all(item['context']['stream_is_scoring_evidence'] is False for item in compared))
+
+    def test_missing_and_not_applicable_skill_evidence_are_distinct(self):
+        from backend.services.recommendation_engine import _evidence_coverage, _parse, _profile_score, career_detail
+        career=career_detail('C01')
+        required=_parse(career['technical_skills'])
+        missing={'education_level':"Bachelor's",'subjects':{},'aptitude':{},'interests':{},'technical':{},'employability':{}}
+        _,parts=_profile_score(missing,career)
+        missing_coverage=_evidence_coverage(missing,career,parts)
+        self.assertEqual(next(d for d in missing_coverage['dimensions'] if d['key']=='technical')['status'],'missing')
+        na={**missing,'skill_assessments':[{'canonical_skill':key,'display_name':key,'applicability':'not_applicable'} for key in required]}
+        _,na_parts=_profile_score(na,career)
+        na_coverage=_evidence_coverage(na,career,na_parts)
+        self.assertEqual(next(d for d in na_coverage['dimensions'] if d['key']=='technical')['status'],'not_applicable')
 if __name__=='__main__': unittest.main()

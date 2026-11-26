@@ -1,36 +1,80 @@
-"""SHAP explanations for the selected tree model plus truthful score rationale."""
-from pathlib import Path
-import joblib, pandas as pd
-from backend.ml.data_loader import ROOT
-from backend.ml.feature_engineering import feature_row
-from backend.ml.predict import CAREER_MODEL_DIR
+"""SHAP explanations for broad career-family signals, not compatibility scores."""
+import numpy as np
+import pandas as pd
 
-def explain_career_model(profile, family):
-    level=profile.get('education_level','10th'); path=CAREER_MODEL_DIR/f'{level.lower().replace(" ","_").replace(chr(39),"")}_career_model.joblib'
-    if not path.exists(): return {'method':'unavailable','target_family':family,'predicted_family':None,'explanation_scope':'model_family','contributions':[],'reason':'No trained stage model is available.'}
+from backend.ml.artifact_contract import ModelInferenceError
+from backend.ml.feature_engineering import feature_row
+from backend.ml.predict import load_active_stage_model
+
+
+def explain_career_model(profile, family, expected_model_identity=None):
+    level=profile.get('education_level','10th')
     try:
-        import shap
-        artifact=joblib.load(path); pipe=artifact['pipeline']; row=feature_row(profile,level)
-        X=pd.DataFrame([{k:row.get(k) for k in artifact['features']}]).replace('',None)
+        validated=load_active_stage_model(level)
+        if expected_model_identity and validated.sha256 != expected_model_identity:
+            return {'method':'unavailable','target_family':family,'predicted_family':None,
+                'explanation_scope':'model_family','output_space':'unavailable',
+                'reason':'model_changed_during_recommendation','contributions':[]}
+        artifact=validated.artifact
+        classes=list(artifact['label_encoder'].classes_)
+        if family not in classes:
+            raise ModelInferenceError('class_mismatch')
+        class_index=classes.index(family)
+        row=feature_row(profile,level)
+        X=pd.DataFrame([{key:row.get(key) for key in artifact['features']}]).replace('',None)
+        pipe=artifact['pipeline']
         transformed=pipe.named_steps['preprocessor'].transform(X)
-        model=pipe.named_steps['model']; probabilities=model.predict_proba(transformed)[0]
-        predicted_family=artifact['label_encoder'].inverse_transform([int(probabilities.argmax())])[0]
-        explainer=shap.TreeExplainer(model); values=explainer.shap_values(transformed)
-        class_index=list(artifact['label_encoder'].classes_).index(family)
-        if isinstance(values,list): vals=values[class_index][0]
+        model=pipe.named_steps['model']
+        probabilities=np.asarray(model.predict_proba(transformed),dtype=float)
+        if (probabilities.shape != (1,len(classes)) or not np.isfinite(probabilities).all()
+                or (probabilities < 0).any() or (probabilities > 1).any()
+                or not np.isclose(float(probabilities[0].sum()),1.0,rtol=0.0,atol=1e-6)):
+            raise ModelInferenceError('probability_values_invalid')
+        import shap
+        values=shap.TreeExplainer(model).shap_values(transformed)
+        if hasattr(values,'values'):
+            values=values.values
+        if isinstance(values,list):
+            if class_index >= len(values):
+                raise ModelInferenceError('explanation_alignment_invalid')
+            class_values=np.asarray(values[class_index])
+            class_values=class_values[0] if class_values.ndim > 1 else class_values
         else:
-            import numpy as np
-            arr=np.asarray(values)
-            vals=arr[0,:,class_index] if arr.ndim==3 else arr[0]
-        names=pipe.named_steps['preprocessor'].get_feature_names_out()
-        merged={}
-        for name,value in zip(names,vals):
-            base=name.split('__',1)[-1].split('_',1)[0] if name.startswith('cat__') else name.split('__',1)[-1]
-            merged[base]=merged.get(base,0.0)+float(value)
-        top=sorted(merged.items(),key=lambda x:abs(x[1]),reverse=True)[:6]
-        return {'method':'SHAP TreeExplainer','model':artifact['selected_model'],'target_family':family,'target_family_probability':round(float(probabilities[class_index]),4),'predicted_family':predicted_family,'explanation_scope':'model_family','contributions':[{'feature':k,'value':round(v,4),'direction':'supports' if v>0 else 'reduces'} for k,v in top]}
-    except Exception as exc:
-        return {'method':'unavailable','target_family':family,'predicted_family':None,'explanation_scope':'model_family','reason':f'SHAP computation failed: {type(exc).__name__}','contributions':[]}
+            array=np.asarray(values)
+            if array.ndim == 3:
+                if array.shape[0] != 1 or array.shape[2] != len(classes):
+                    raise ModelInferenceError('explanation_alignment_invalid')
+                class_values=array[0,:,class_index]
+            elif array.ndim == 2 and array.shape[0] == 1:
+                class_values=array[0]
+            else:
+                raise ModelInferenceError('explanation_alignment_invalid')
+        names=list(pipe.named_steps['preprocessor'].get_feature_names_out())
+        if len(class_values) != len(names) or not np.isfinite(class_values).all():
+            raise ModelInferenceError('explanation_alignment_invalid')
+        # Keep one-hot category identity intact instead of truncating at underscores.
+        readable=[name.split('__',1)[-1] for name in names]
+        contributions=[{'feature':name,'value':round(float(value),4),
+            'direction':'supports' if value>0 else 'reduces'}
+            for name,value in zip(readable,class_values)]
+        contributions=sorted(contributions,key=lambda item:abs(item['value']),reverse=True)[:6]
+        estimator_name=type(model).__name__
+        output_space='raw_margin' if estimator_name.startswith('XGB') else 'probability'
+        return {'method':'SHAP TreeExplainer','model':artifact.get('selected_model',estimator_name),
+            'target_family':family,
+            'target_family_probability':round(float(probabilities[0,class_index]),4),
+            'predicted_family':classes[int(probabilities[0].argmax())],
+            'explanation_scope':'model_family','output_space':output_space,
+            'model_identity':validated.sha256,
+            'contributions':contributions}
+    except ModelInferenceError as exc:
+        reason=exc.reason
+    except Exception:
+        reason='explanation_unavailable'
+    return {'method':'unavailable','target_family':family,'predicted_family':None,
+        'explanation_scope':'model_family','output_space':'unavailable',
+        'reason':reason,'contributions':[]}
+
 
 def explain(profile,career_id):
     from backend.services.recommendation_engine import recommend

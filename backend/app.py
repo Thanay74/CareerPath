@@ -7,7 +7,10 @@ from datetime import datetime,timezone
 from urllib.parse import urlparse,unquote
 from backend.database_config import resolve_database_target, DatabaseTargetError
 from backend.interprocess_lock import interprocess_file_lock
-from backend.services.recommendation_engine import recommend,career_detail
+from backend.services.recommendation_engine import recommend,recommend_with_catalog_fingerprint,career_detail
+from backend.recommendation_snapshots import (decode_history,encode_history,new_snapshot,
+    recommendation_input_fingerprint,select_current_snapshot,FORMAT,FORMAT_VERSION)
+from backend.academic_history import empty_academic_history,validate_academic_history
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -40,6 +43,7 @@ class MySQLConnection:
     def execute(self,sql,params=()):
         cur=self.raw.cursor(); cur.execute(sql.replace('?','%s'),params); return MySQLResult(cur)
     def commit(self): self.raw.commit()
+    def rollback(self): self.raw.rollback()
     def close(self): self.raw.close()
 def connect_db():
     if _DATABASE_CONFIG_ERROR:
@@ -63,9 +67,9 @@ def seed_aptitude_questions(conn):
     for q in QUESTIONS:
         params=(q['question_id'],q['domain'],q['difficulty'],q['question_text'],json.dumps(q['options']),q['correct_option'],q['explanation'],json.dumps(q['education_levels']))
         if USE_MYSQL:
-            conn.execute('INSERT IGNORE INTO aptitude_questions(question_id,domain,difficulty,question_text,options_json,correct_option,explanation,education_levels_json) VALUES(?,?,?,?,?,?,?,?)',params)
+            conn.execute('INSERT INTO aptitude_questions(question_id,domain,difficulty,question_text,options_json,correct_option,explanation,education_levels_json) VALUES(?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE education_levels_json=VALUES(education_levels_json),is_active=TRUE',params)
         else:
-            conn.execute('INSERT OR IGNORE INTO aptitude_questions(question_id,domain,difficulty,question_text,options_json,correct_option,explanation,education_levels_json) VALUES(?,?,?,?,?,?,?,?)',params)
+            conn.execute('INSERT INTO aptitude_questions(question_id,domain,difficulty,question_text,options_json,correct_option,explanation,education_levels_json) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(question_id) DO UPDATE SET education_levels_json=excluded.education_levels_json,is_active=1',params)
 
 def seed_education_catalog(conn):
     from backend.education_catalog import EDUCATION_CATALOG
@@ -122,7 +126,7 @@ def init_db():
             if columns and 'assessment_type' not in columns:
                 conn.close(); raise RuntimeError('Legacy assessments schema detected; setup stopped before DDL. A reviewed data-preserving migration is required.')
         conn.execute("CREATE TABLE IF NOT EXISTS users(user_id BIGINT PRIMARY KEY AUTO_INCREMENT,email VARCHAR(255) UNIQUE NOT NULL,password_hash VARCHAR(255) NOT NULL,token VARCHAR(128) UNIQUE,role ENUM('student','admin') NOT NULL DEFAULT 'student',is_active BOOLEAN NOT NULL DEFAULT TRUE,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
-        conn.execute("CREATE TABLE IF NOT EXISTS students(student_id VARCHAR(64) PRIMARY KEY,user_id BIGINT UNIQUE,education_level VARCHAR(32) NOT NULL,age TINYINT NULL,gender VARCHAR(40) NULL,stream VARCHAR(64) NULL,FOREIGN KEY(user_id) REFERENCES users(user_id))")
+        conn.execute("CREATE TABLE IF NOT EXISTS students(student_id VARCHAR(64) PRIMARY KEY,user_id BIGINT UNIQUE,education_level VARCHAR(32) NOT NULL,age TINYINT NULL,gender VARCHAR(40) NULL,stream VARCHAR(64) NULL,academic_history JSON NULL,FOREIGN KEY(user_id) REFERENCES users(user_id))")
         conn.execute('CREATE TABLE IF NOT EXISTS academic_records(student_id VARCHAR(64),subject_name VARCHAR(64),score DECIMAL(5,2),PRIMARY KEY(student_id,subject_name),FOREIGN KEY(student_id) REFERENCES students(student_id) ON DELETE CASCADE)')
         user_cols={r['COLUMN_NAME'] for r in conn.execute("SELECT COLUMN_NAME FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='users'").fetchall()}
         if 'role' not in user_cols: conn.execute("ALTER TABLE users ADD COLUMN role ENUM('student','admin') NOT NULL DEFAULT 'student'")
@@ -130,13 +134,14 @@ def init_db():
         if 'created_at' not in user_cols: conn.execute('ALTER TABLE users ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
         stu_cols={r['COLUMN_NAME'] for r in conn.execute("SELECT COLUMN_NAME FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='students'").fetchall()}
         if 'profile_updated_at' not in stu_cols: conn.execute('ALTER TABLE students ADD COLUMN profile_updated_at TIMESTAMP NULL')
-        for name,ddl in [('age','TINYINT NULL'),('gender','VARCHAR(40) NULL'),('stream','VARCHAR(128) NULL'),('degree','VARCHAR(255) NULL'),('specialization','VARCHAR(255) NULL'),('study_period','VARCHAR(64) NULL'),('academic_performance','DECIMAL(5,2) NULL'),('academic_scale',"VARCHAR(16) NOT NULL DEFAULT 'percentage'"),('research_interests','TEXT NULL'),('career_preferences','TEXT NULL')]:
+        for name,ddl in [('age','TINYINT NULL'),('gender','VARCHAR(40) NULL'),('stream','VARCHAR(128) NULL'),('degree','VARCHAR(255) NULL'),('specialization','VARCHAR(255) NULL'),('study_period','VARCHAR(64) NULL'),('academic_performance','DECIMAL(5,2) NULL'),('academic_scale',"VARCHAR(16) NOT NULL DEFAULT 'percentage'"),('research_interests','TEXT NULL'),('career_preferences','TEXT NULL'),('academic_history','JSON NULL')]:
             if name not in stu_cols: conn.execute(f'ALTER TABLE students ADD COLUMN {name} {ddl}')
         if 'profile_json' in stu_cols: conn.execute('ALTER TABLE students MODIFY profile_json JSON NULL')
         assessment_cols={r['COLUMN_NAME'] for r in conn.execute("SELECT COLUMN_NAME FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='assessments'").fetchall()}
         if assessment_cols and 'assessment_type' not in assessment_cols:
             conn.execute('RENAME TABLE assessments TO assessments_legacy_json')
         conn.execute("CREATE TABLE IF NOT EXISTS assessments(student_id VARCHAR(64),assessment_type ENUM('aptitude','interests','technical','employability'),feature_name VARCHAR(64),score DECIMAL(5,2),PRIMARY KEY(student_id,assessment_type,feature_name),FOREIGN KEY(student_id) REFERENCES students(student_id) ON DELETE CASCADE)")
+        conn.execute("CREATE TABLE IF NOT EXISTS student_skill_details(student_id VARCHAR(64) NOT NULL,skill_key VARCHAR(128) NOT NULL,normalized_name VARCHAR(128) NOT NULL,display_name VARCHAR(255) NOT NULL,category VARCHAR(32) NOT NULL,applicability VARCHAR(24) NOT NULL,proficiency DECIMAL(5,2) NULL,source_context VARCHAR(32) NULL,canonical_skill VARCHAR(64) NULL,is_custom BOOLEAN NOT NULL DEFAULT FALSE,PRIMARY KEY(student_id,skill_key),UNIQUE KEY uq_student_skill_name(student_id,normalized_name),CHECK(category IN ('technical','employability')),CHECK(applicability IN ('not_applicable','assessed')),CHECK(proficiency IS NULL OR proficiency BETWEEN 0 AND 100),CHECK(is_custom IN (0,1)),FOREIGN KEY(student_id) REFERENCES students(student_id) ON DELETE CASCADE)")
         conn.execute('CREATE TABLE IF NOT EXISTS recommendations(recommendation_id BIGINT PRIMARY KEY AUTO_INCREMENT,student_id VARCHAR(64) UNIQUE NOT NULL,results_json JSON NOT NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(student_id) REFERENCES students(student_id))')
         conn.execute("CREATE TABLE IF NOT EXISTS aptitude_questions(question_id VARCHAR(16) PRIMARY KEY,domain VARCHAR(64) NOT NULL,difficulty VARCHAR(32) NOT NULL,question_text TEXT NOT NULL,options_json JSON NOT NULL,correct_option CHAR(1) NOT NULL,explanation TEXT NOT NULL,education_levels_json JSON NOT NULL,is_active BOOLEAN NOT NULL DEFAULT TRUE)")
         question_cols={r['COLUMN_NAME'] for r in conn.execute("SELECT COLUMN_NAME FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='aptitude_questions'").fetchall()}
@@ -164,9 +169,10 @@ def init_db():
             conn.close(); raise RuntimeError('Legacy assessments schema detected; setup stopped before DDL. A reviewed data-preserving migration is required.')
     conn.executescript('''PRAGMA foreign_keys=ON;
     CREATE TABLE IF NOT EXISTS users(user_id INTEGER PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, token TEXT UNIQUE, role TEXT NOT NULL DEFAULT 'student' CHECK(role IN ('student','admin')), is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-    CREATE TABLE IF NOT EXISTS students(student_id TEXT PRIMARY KEY, user_id INTEGER UNIQUE, education_level TEXT NOT NULL, age INTEGER, gender TEXT, stream TEXT, degree TEXT, specialization TEXT, study_period TEXT, academic_performance REAL, academic_scale TEXT NOT NULL DEFAULT 'percentage', research_interests TEXT, career_preferences TEXT, profile_updated_at TEXT, FOREIGN KEY(user_id) REFERENCES users(user_id));
+    CREATE TABLE IF NOT EXISTS students(student_id TEXT PRIMARY KEY, user_id INTEGER UNIQUE, education_level TEXT NOT NULL, age INTEGER, gender TEXT, stream TEXT, degree TEXT, specialization TEXT, study_period TEXT, academic_performance REAL, academic_scale TEXT NOT NULL DEFAULT 'percentage', research_interests TEXT, career_preferences TEXT, academic_history TEXT, profile_updated_at TEXT, FOREIGN KEY(user_id) REFERENCES users(user_id));
     CREATE TABLE IF NOT EXISTS academic_records(student_id TEXT NOT NULL, subject_name TEXT NOT NULL, score REAL, PRIMARY KEY(student_id,subject_name), FOREIGN KEY(student_id) REFERENCES students(student_id) ON DELETE CASCADE);
     CREATE TABLE IF NOT EXISTS assessments(student_id TEXT NOT NULL, assessment_type TEXT NOT NULL, feature_name TEXT NOT NULL, score REAL, PRIMARY KEY(student_id,assessment_type,feature_name), FOREIGN KEY(student_id) REFERENCES students(student_id) ON DELETE CASCADE);
+    CREATE TABLE IF NOT EXISTS student_skill_details(student_id TEXT NOT NULL,skill_key TEXT NOT NULL,normalized_name TEXT NOT NULL,display_name TEXT NOT NULL,category TEXT NOT NULL CHECK(category IN ('technical','employability')),applicability TEXT NOT NULL CHECK(applicability IN ('not_applicable','assessed')),proficiency REAL NULL CHECK(proficiency IS NULL OR proficiency BETWEEN 0 AND 100),source_context TEXT NULL,canonical_skill TEXT NULL,is_custom INTEGER NOT NULL DEFAULT 0 CHECK(is_custom IN (0,1)),PRIMARY KEY(student_id,skill_key),UNIQUE(student_id,normalized_name),FOREIGN KEY(student_id) REFERENCES students(student_id) ON DELETE CASCADE);
     CREATE TABLE IF NOT EXISTS recommendations(student_id TEXT PRIMARY KEY, results_json TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(student_id) REFERENCES students(student_id));''')
     # Upgrade databases created by earlier CareerPath versions.
     if 'role' not in [r[1] for r in conn.execute('PRAGMA table_info(users)').fetchall()]: conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'student'")
@@ -174,7 +180,7 @@ def init_db():
     if 'created_at' not in [r[1] for r in conn.execute('PRAGMA table_info(users)').fetchall()]: conn.execute("ALTER TABLE users ADD COLUMN created_at TEXT")
     if 'created_at' not in [r[1] for r in conn.execute('PRAGMA table_info(recommendations)').fetchall()]: conn.execute("ALTER TABLE recommendations ADD COLUMN created_at TEXT")
     student_cols=[r[1] for r in conn.execute('PRAGMA table_info(students)').fetchall()]
-    for name,kind in [('age','INTEGER'),('gender','TEXT'),('stream','TEXT'),('degree','TEXT'),('specialization','TEXT'),('study_period','TEXT'),('academic_performance','REAL'),('academic_scale',"TEXT NOT NULL DEFAULT 'percentage'"),('research_interests','TEXT'),('career_preferences','TEXT')]:
+    for name,kind in [('age','INTEGER'),('gender','TEXT'),('stream','TEXT'),('degree','TEXT'),('specialization','TEXT'),('study_period','TEXT'),('academic_performance','REAL'),('academic_scale',"TEXT NOT NULL DEFAULT 'percentage'"),('research_interests','TEXT'),('career_preferences','TEXT'),('academic_history','TEXT')]:
         if name not in student_cols: conn.execute(f'ALTER TABLE students ADD COLUMN {name} {kind}')
     if 'profile_updated_at' not in student_cols: conn.execute('ALTER TABLE students ADD COLUMN profile_updated_at TEXT')
     assessment_cols=[r[1] for r in conn.execute('PRAGMA table_info(assessments)').fetchall()]
@@ -221,7 +227,10 @@ def record_admin_action(action,resource_type,resource_id=None,details=None):
     db().execute('INSERT INTO admin_audit_logs(admin_user_id,action,resource_type,resource_id,details_json) VALUES(?,?,?,?,?)',(admin['user_id'] if admin else None,action,resource_type,str(resource_id) if resource_id is not None else None,json.dumps(details or {})))
     db().commit()
 
-def err(msg,status=400): return jsonify(error=msg),status
+def err(msg,status=400,code=None):
+    body={'error':msg}
+    if code: body['code']=code
+    return jsonify(body),status
 def valid_scores(values):
     return isinstance(values,dict) and all(isinstance(k,str) and 0<len(k)<=64 and (v is None or (type(v) in (int,float) and 0<=v<=100)) for k,v in values.items())
 def valid_profile(profile):
@@ -272,15 +281,26 @@ def admin_authorized():
     return bool(token and db().execute("SELECT 1 FROM users WHERE token=? AND role='admin' AND is_active=1",(token,)).fetchone())
 def admin_required(): return None if admin_authorized() else err('Admin bearer token required',403)
 def student_profile(sid):
-    row=db().execute('SELECT education_level,age,gender,stream,degree,specialization,study_period,academic_performance,academic_scale,research_interests,career_preferences FROM students WHERE student_id=?',(sid,)).fetchone()
+    row=db().execute('SELECT education_level,age,gender,stream,degree,specialization,study_period,academic_performance,academic_scale,research_interests,career_preferences,academic_history FROM students WHERE student_id=?',(sid,)).fetchone()
     if not row: return None
-    p={'education_level':row['education_level'],'age':row['age'],'gender':row['gender'],'stream':row['stream'],'degree':row['degree'],'specialization':row['specialization'],'study_period':row['study_period'],'academic_performance':float(row['academic_performance']) if row['academic_performance'] is not None else None,'academic_scale':row['academic_scale'],'research_interests':row['research_interests'],'career_preferences':row['career_preferences'],'subjects':{}}
+    history=unpack(row['academic_history']) if row['academic_history'] else empty_academic_history(row['education_level'])
+    p={'education_level':row['education_level'],'age':row['age'],'gender':row['gender'],'stream':row['stream'],'degree':row['degree'],'specialization':row['specialization'],'study_period':row['study_period'],'academic_performance':float(row['academic_performance']) if row['academic_performance'] is not None else None,'academic_scale':row['academic_scale'],'research_interests':row['research_interests'],'career_preferences':row['career_preferences'],'academic_history':history,'subjects':{}}
     for score in db().execute('SELECT subject_name,score FROM academic_records WHERE student_id=?',(sid,)).fetchall(): p['subjects'][score['subject_name']]=float(score['score']) if score['score'] is not None else None
-    p.update({'aptitude':{},'interests':{},'technical':{},'employability':{}})
+    p.update({'aptitude':{},'interests':{},'technical':{},'employability':{},'skill_assessments':[]})
     groups={'interests':'interests','technical':'technical','employability':'employability'}
     for score in db().execute('SELECT assessment_type,feature_name,score FROM assessments WHERE student_id=?',(sid,)).fetchall():
         group=groups.get(score['assessment_type'])
         if group: p[group][score['feature_name']]=float(score['score']) if score['score'] is not None else None
+    for skill in db().execute('SELECT skill_key,normalized_name,display_name,category,applicability,proficiency,source_context,canonical_skill,is_custom FROM student_skill_details WHERE student_id=?',(sid,)).fetchall():
+        item=dict(skill)
+        item['proficiency']=float(item['proficiency']) if item['proficiency'] is not None else None
+        item['is_custom']=bool(item['is_custom'])
+        p['skill_assessments'].append(item)
+        if item['canonical_skill'] and not item['is_custom']:
+            if item['applicability']=='not_applicable':
+                p[item['category']].pop(item['canonical_skill'],None)
+            elif item['applicability']=='assessed' and item['proficiency'] is not None:
+                p[item['category']].setdefault(item['canonical_skill'],item['proficiency'])
     # Only backend-scored completed attempts are authoritative aptitude results.
     scored=db().execute('SELECT ds.domain,ds.score FROM aptitude_domain_scores ds JOIN aptitude_attempts a ON a.attempt_id=ds.attempt_id WHERE a.attempt_id=(SELECT MAX(a2.attempt_id) FROM aptitude_attempts a2 WHERE a2.student_id=? AND a2.status=?)',(sid,'completed')).fetchall()
     p['aptitude']={row['domain']:float(row['score']) for row in scored}
@@ -333,6 +353,8 @@ def save_profile():
     data=request.get_json(silent=True) or {}; sid=data.get('student_id'); level=data.get('education_level')
     if not sid or level not in ('10th','12th',"Bachelor's","Master's"): return err('student_id and a supported education_level are required')
     if not authorized(sid): return err('Valid bearer token for this student is required',401)
+    academic_history,history_error=validate_academic_history(level,data.get('academic_history'),data.get('stream',''))
+    if history_error: return err(history_error)
     profile={'education_level':level,'stream':data.get('stream',''),'age':data.get('age')}
     for key in ('degree','specialization','study_period','research_interests','career_preferences'):
         value=data.get(key,'')
@@ -349,7 +371,7 @@ def save_profile():
     if not valid_scores(subjects): return err('Subject scores must be 0-100 or null')
     profile['subjects']=subjects
     if not valid_profile(profile): return err('Profile scores must be 0-100 or null, and stream/age must be valid')
-    cur=db().execute('UPDATE students SET education_level=?,stream=?,age=?,degree=?,specialization=?,study_period=?,academic_performance=?,academic_scale=?,research_interests=?,career_preferences=?,profile_updated_at=CURRENT_TIMESTAMP WHERE student_id=?',(level,profile['stream'],profile.get('age'),profile['degree'],profile['specialization'],profile['study_period'],performance,scale,profile['research_interests'],profile['career_preferences'],sid))
+    cur=db().execute('UPDATE students SET education_level=?,stream=?,age=?,degree=?,specialization=?,study_period=?,academic_performance=?,academic_scale=?,research_interests=?,career_preferences=?,academic_history=?,profile_updated_at=CURRENT_TIMESTAMP WHERE student_id=?',(level,profile['stream'],profile.get('age'),profile['degree'],profile['specialization'],profile['study_period'],performance,scale,profile['research_interests'],profile['career_preferences'],json.dumps(academic_history,ensure_ascii=False),sid))
     if cur.rowcount==0: return err('Student not found',404)
     db().execute('DELETE FROM academic_records WHERE student_id=?',(sid,))
     for name,value in subjects.items(): db().execute('INSERT INTO academic_records(student_id,subject_name,score) VALUES(?,?,?)',(sid,name,value))
@@ -477,6 +499,7 @@ def create_aptitude_attempt():
     import random
     rows=db().execute('SELECT question_id,domain,difficulty,question_text,options_json,education_levels_json,correct_option,explanation FROM aptitude_questions WHERE is_active=1 ORDER BY question_id').fetchall()
     selected=[{'question_id':r['question_id'],'domain':r['domain'],'difficulty':r['difficulty'],'question_text':r['question_text'],'options':unpack(r['options_json']),'education_levels':unpack(r['education_levels_json']),'correct_option':r['correct_option'],'explanation':r['explanation']} for r in rows if level in unpack(r['education_levels_json'])]
+    if not selected: return err('No active aptitude questions are configured for this education level. No attempt was created.',409,'APTITUDE_QUESTION_BANK_EMPTY')
     random.SystemRandom().shuffle(selected)
     cur=db().execute('INSERT INTO aptitude_attempts(student_id,status) VALUES(?,?)',(sid,'in_progress')); attempt_id=cur.lastrowid
     for order,q in enumerate(selected,1): db().execute('INSERT INTO aptitude_attempt_questions(attempt_id,question_id,question_order) VALUES(?,?,?)',(attempt_id,q['question_id'],order))
@@ -543,11 +566,67 @@ def skills():
     if not sid or not valid_scores(tech) or not valid_scores(emp): return err('student_id and numeric technical/employability scores from 0 to 100 are required')
     if not authorized(sid): return err('Valid bearer token for this student is required',401)
     if not db().execute('SELECT 1 FROM students WHERE student_id=?',(sid,)).fetchone(): return err('Student not found',404)
+    details=data.get('skill_assessments',None)
+    if details is not None:
+        from backend.skill_catalog import canonical_skill, normalize_skill_name, SKILLS
+        if not isinstance(details,list) or len(details)>100: return err('skill_assessments must be a list with at most 100 entries')
+        seen_keys=set(); seen_names=set(); seen_canonical=set(); cleaned=[]
+        allowed_contexts={'course','self_learning','certification','internship','work_experience','other'}
+        for item in details:
+            if not isinstance(item,dict): return err('Each skill assessment must be an object')
+            display=str(item.get('display_name') or '').strip()
+            category=item.get('category'); applicability=item.get('applicability'); is_custom=item.get('is_custom') is True
+            if not display or len(display)>255 or category not in ('technical','employability'):
+                return err('Skill name or category is invalid')
+            normalized=normalize_skill_name(display)
+            if not normalized or len(normalized)>128 or normalized in seen_names: return err('Duplicate or invalid skill name')
+            seen_names.add(normalized)
+            canonical=canonical_skill(display)
+            submitted_canonical=item.get('canonical_skill')
+            if submitted_canonical is not None and submitted_canonical!=canonical:
+                return err('Skill canonical mapping does not match the standardized catalogue')
+            if is_custom:
+                skill_key='custom:'+re.sub(r'[^a-z0-9]+','_',normalized).strip('_')
+                context=item.get('source_context') or None
+                score=item.get('proficiency')
+                if applicability!='assessed' or type(score) not in (int,float) or not 0<=score<=100:
+                    return err('Custom skills require an assessed proficiency from 0 to 100')
+                if context is not None and (not isinstance(context,str) or context not in allowed_contexts): return err('Custom skill source/context is invalid')
+                if canonical:
+                    if category != SKILLS[canonical][1]: return err('A recognized custom skill must use its catalogue category')
+                    if canonical in tech or canonical in emp: return err('This skill is already assessed in the predefined catalogue')
+                    if canonical in seen_canonical: return err('Duplicate standardized skill mapping')
+                    seen_canonical.add(canonical)
+                cleaned.append((skill_key,normalized,display,category,'assessed',score,context,canonical,1))
+            else:
+                skill_key=str(item.get('skill_key') or '')
+                if applicability!='not_applicable' or not skill_key or len(skill_key)>128:
+                    return err('Predefined skill state must be Not applicable or omitted as unassessed')
+                if not canonical or skill_key!=canonical: return err('Not-applicable state must reference a standardized catalogue skill')
+                if category!=SKILLS[canonical][1]: return err('Predefined skill category does not match the catalogue')
+                if canonical and (canonical in tech or canonical in emp): return err('A not-applicable skill cannot also have a proficiency score')
+                if canonical and canonical in seen_canonical: return err('Duplicate standardized skill mapping')
+                if canonical: seen_canonical.add(canonical)
+                cleaned.append((skill_key,normalized,display,category,'not_applicable',None,None,canonical,0))
+            if skill_key in seen_keys: return err('Duplicate skill entry')
+            seen_keys.add(skill_key)
     for kind,values in [('technical',tech),('employability',emp)]:
         db().execute('DELETE FROM assessments WHERE student_id=? AND assessment_type=?',(sid,kind))
         for feature,value in values.items():
             db().execute('INSERT INTO assessments(student_id,assessment_type,feature_name,score) VALUES(?,?,?,?)',(sid,kind,feature,value))
+    if details is not None:
+        db().execute('DELETE FROM student_skill_details WHERE student_id=?',(sid,))
+        for item in cleaned:
+            db().execute('INSERT INTO student_skill_details(student_id,skill_key,normalized_name,display_name,category,applicability,proficiency,source_context,canonical_skill,is_custom) VALUES(?,?,?,?,?,?,?,?,?,?)',(sid,*item))
     db().commit(); return jsonify(saved=True)
+
+@app.get('/api/education/skills')
+def education_skills():
+    from backend.skill_catalog import education_skill_catalog
+    profile={key:request.args.get(key,'') for key in ('education_level','stream','degree','specialization')}
+    if profile['education_level'] not in ('10th','12th',"Bachelor's","Master's"):
+        return err('A supported education_level is required')
+    return jsonify(catalog=education_skill_catalog(profile))
 @app.post('/api/recommend')
 def create_recommendations():
     data=request.get_json(silent=True) or {}; sid=data.get('student_id')
@@ -559,12 +638,53 @@ def create_recommendations():
     if not valid_profile(p): return err('Profile has invalid education level, stream, age, or scores')
     top_n=data.get('top_n',5)
     if type(top_n) is not int or not 1<=top_n<=5: return err('top_n must be an integer from 1 to 5')
-    results=recommend(p,top_n)
-    db().execute('INSERT INTO recommendation_events(student_id) VALUES(?)',(sid,))
-    if sid:
+    results,catalog_fingerprint=recommend_with_catalog_fingerprint(p,top_n)
+    input_fingerprint=recommendation_input_fingerprint(p)
+    from backend.ml.predict import model_artifact_identity
+    model_identity=getattr(results,'model_identity',None)
+    model_status=getattr(results,'model_status','unavailable')
+    model_failure_reason=getattr(results,'model_failure_reason',None)
+    model_validation_status=getattr(results,'model_validation_status',None)
+    model_missing_metadata=list(getattr(results,'model_missing_metadata',()))
+    conn=db()
+    try:
+        # Serialize snapshot appends across processes. SQLite's write lock and
+        # MySQL's student-row lock protect the read/append/write sequence.
+        if USE_MYSQL:
+            conn.execute('SELECT student_id FROM students WHERE student_id=? FOR UPDATE',(sid,)).fetchone()
+        else:
+            conn.execute('BEGIN IMMEDIATE')
+        row=conn.execute('SELECT results_json FROM recommendations WHERE student_id=?',(sid,)).fetchone()
+        history={"format":FORMAT,"format_version":FORMAT_VERSION,"snapshots":[],"legacy_records":[]}
+        if row:
+            try:
+                history,was_legacy=decode_history(row['results_json'])
+                if was_legacy:
+                    pass
+            except (ValueError,TypeError,json.JSONDecodeError):
+                # Preserve malformed legacy bytes as opaque history; never
+                # overwrite user data merely because it predates this format.
+                raw=row['results_json']
+                history['legacy_records'].append(raw.decode('utf-8','replace') if isinstance(raw,bytes) else str(raw))
+        snapshot=new_snapshot(input_fingerprint,catalog_fingerprint,results,model_identity)
+        history['snapshots'].append(snapshot)
+        db().execute('INSERT INTO recommendation_events(student_id) VALUES(?)',(sid,))
         sql='INSERT INTO recommendations(student_id,results_json) VALUES(?,?) ON DUPLICATE KEY UPDATE results_json=VALUES(results_json)' if USE_MYSQL else 'INSERT INTO recommendations(student_id,results_json) VALUES(?,?) ON CONFLICT(student_id) DO UPDATE SET results_json=excluded.results_json'
-        db().execute(sql,(sid,json.dumps(results))); db().commit()
-    return jsonify(student_id=sid,recommendations=results)
+        db().execute(sql,(sid,encode_history(history)))
+        current_profile=student_profile(sid)
+        current_input=recommendation_input_fingerprint(current_profile) if current_profile else None
+        current_catalog=_active_catalog_fingerprint()
+        current_model=model_artifact_identity(p.get('education_level','10th'))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    freshness='current' if (model_identity and model_identity==current_model and current_input==input_fingerprint and current_catalog==catalog_fingerprint) else 'unverified' if not model_identity or not current_model else 'stale'
+    return jsonify(student_id=sid,recommendations=results,freshness=freshness,
+                   model_status=model_status,model_failure_reason=model_failure_reason,
+                   model_validation_status=model_validation_status,
+                   model_metadata_unverified=model_missing_metadata,
+                   snapshot={k:snapshot[k] for k in ('snapshot_id','created_at','input_version','input_fingerprint','catalog_fingerprint','model_identity')})
 @app.get('/api/recommendations')
 def get_recommendations():
     sid=request.args.get('student_id')
@@ -572,14 +692,46 @@ def get_recommendations():
     ownership_error=recommendation_owner_error(sid)
     if ownership_error: return ownership_error
     row=db().execute('SELECT results_json FROM recommendations WHERE student_id=?',(sid,)).fetchone()
-    return (jsonify(recommendations=unpack(row[0])) if row else err('No recommendation run found',404))
+    if not row: return jsonify(freshness='none',recommendations=[])
+    try:
+        history,legacy_only=decode_history(row['results_json'])
+    except (ValueError,TypeError,json.JSONDecodeError):
+        return jsonify(freshness='unverified',recommendations=[],message='Saved recommendations could not be verified.')
+    profile=student_profile(sid)
+    current_input=recommendation_input_fingerprint(profile) if profile else None
+    current_catalog=_active_catalog_fingerprint()
+    from backend.ml.predict import model_artifact_identity
+    current_model=model_artifact_identity(profile.get('education_level','10th')) if profile else None
+    snapshot=select_current_snapshot(history,current_input,current_catalog,current_model) if current_input else None
+    if snapshot:
+        metadata={k:snapshot[k] for k in ('snapshot_id','created_at','input_version','input_fingerprint','catalog_fingerprint','model_identity')}
+        return jsonify(freshness='current',snapshot=metadata,recommendations=snapshot['recommendations'])
+    if history['snapshots'] and (not current_model or any(not isinstance(item.get('model_identity'),str) or not item.get('model_identity') for item in history['snapshots'])):
+        return jsonify(freshness='unverified',recommendations=[],message='Saved recommendations do not have verifiable model lineage.')
+    if not history['snapshots'] and history['legacy_records']:
+        return jsonify(freshness='unverified',recommendations=[],message='Saved recommendations predate freshness verification.')
+    if history['snapshots']:
+        return jsonify(freshness='stale',recommendations=[],message='Saved recommendations do not match the current profile or catalog.')
+    return jsonify(freshness='unverified',recommendations=[],message='Saved recommendations could not be verified.')
+
+def _active_catalog_fingerprint():
+    from backend.services.recommendation_engine import KB,METADATA
+    from backend.services.catalog_releases import load_active_catalog
+    return load_active_catalog(KB,METADATA).fingerprint
 @app.get('/api/career/<career_id>')
 def get_career(career_id):
     row=career_detail(career_id)
     return jsonify(career=row) if row else err('Career not found',404)
 def latest(sid):
     row=db().execute('SELECT results_json FROM recommendations WHERE student_id=?',(sid,)).fetchone()
-    return unpack(row[0]) if row else None
+    if not row: return None
+    try: history,_=decode_history(row['results_json'])
+    except (ValueError,TypeError,json.JSONDecodeError): return None
+    profile=student_profile(sid)
+    if not profile: return None
+    from backend.ml.predict import model_artifact_identity
+    snapshot=select_current_snapshot(history,recommendation_input_fingerprint(profile),_active_catalog_fingerprint(),model_artifact_identity(profile.get('education_level','10th')))
+    return snapshot['recommendations'] if snapshot else None
 @app.get('/api/skill-gap')
 def get_gaps():
     sid=request.args.get('student_id','')

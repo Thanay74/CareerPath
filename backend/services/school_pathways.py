@@ -85,9 +85,7 @@ def _subject_dimension(values, relevant_keys):
 
 def _preference_signal(profile, pathway, rule):
     signals = []
-    chosen = (profile.get("stream") or "").strip()
-    if chosen in PATHWAY_RULES:
-        signals.append((100.0 if chosen == pathway else 0.0, f"selected pathway preference: {chosen}"))
+    # Education stream is context, not evidence of personal compatibility.
     text = " ".join(str(profile.get(key) or "") for key in ("career_preferences", "research_interests")).lower()
     if text.strip():
         phrases = [word for word in rule["keywords"] if re.search(r"(?<![a-z0-9])" + re.escape(word) + r"(?![a-z0-9])", text)]
@@ -115,12 +113,43 @@ def evaluate_pathway(profile, pathway, model_probabilities=None):
     interest_score, interests = _dimension(profile.get("interests"), rule["interests"])
     preference_score, preferences = _preference_signal(profile, pathway, rule)
     dimensions = {"academic": subject_score, "aptitude": aptitude_score, "interests": interest_score, "preferences": preference_score}
-    active_weight = sum(WEIGHTS[key] for key, value in dimensions.items() if value is not None)
-    knowledge = round(sum(value * WEIGHTS[key] for key, value in dimensions.items() if value is not None) / active_weight, 1) if active_weight else None
-    ml = _family_probability(model_probabilities, rule)
-    combined = round(0.90 * knowledge + 0.10 * ml, 1) if knowledge is not None and ml is not None else knowledge
-
     assessed = [("subject", key, score) for key, score in subjects] + [("aptitude", key, score) for key, score in aptitude]
+    assessed += [("interest", key, score) for key, score in interests]
+    assessed += [("preference", text, score) for score, text in preferences]
+    assessed_domains = sum(value is not None for value in dimensions.values())
+    evidence_items = len(assessed)
+    evidence_sufficient = assessed_domains >= 2 and evidence_items >= 2
+    active_weight = sum(WEIGHTS[key] for key, value in dimensions.items() if value is not None)
+    knowledge_value = round(sum(value * WEIGHTS[key] for key, value in dimensions.items() if value is not None) / active_weight, 1) if active_weight else None
+    knowledge = knowledge_value if evidence_sufficient else None
+    ml = _family_probability(model_probabilities, rule) if evidence_sufficient else None
+    combined = round(0.90 * knowledge + 0.10 * ml, 1) if knowledge is not None and ml is not None else knowledge
+    def evidence_dimension(key, label, required, used, score):
+        required=list(required); used=[name for name, _ in used]
+        status="assessed" if score is not None else "not_applicable" if not required else "missing"
+        missing=[name for name in required if not any(alias in used for alias in (SUBJECT_ALIASES.get(name,(name,)) if key=="academic" else (name,)))]
+        return {"key": key, "label": label, "status": status, "score": score,
+            "inputs_used": used, "missing_inputs": missing,
+            "not_applicable_inputs": []}
+
+    evidence_coverage = {
+        "status": "sufficient" if evidence_sufficient else "insufficient",
+        "sufficient": evidence_sufficient,
+        "assessed_dimensions": assessed_domains,
+        "total_dimensions": len(dimensions),
+        "coverage_percent": round(100 * assessed_domains / len(dimensions)),
+        "input_count": evidence_items,
+        "minimum_dimensions_required": 2,
+        "minimum_inputs_required": 2,
+        "dimensions": [
+            evidence_dimension("academic", "Self-reported subject ratings", rule["subjects"], subjects, subject_score),
+            evidence_dimension("aptitude", "Aptitude assessment", rule["aptitude"], aptitude, aptitude_score),
+            evidence_dimension("interests", "Interests", rule["interests"], interests, interest_score),
+            evidence_dimension("preferences", "Career and research preferences", ["career/research preference"] if preferences else [], [("career/research preference", score) for score, _ in preferences], preference_score),
+        ],
+        "summary": (f"{assessed_domains} of {len(dimensions)} assessment areas contributed using {evidence_items} provided inputs." if evidence_sufficient else
+            f"Only {assessed_domains} of {len(dimensions)} assessment areas contributed using {evidence_items} provided inputs. A personalized score needs at least 2 areas and 2 inputs; this is a provisional pathway suggestion."),
+    }
     gaps = []
     for kind, key, score in assessed:
         if score < GUIDANCE_THRESHOLD:
@@ -139,7 +168,7 @@ def evaluate_pathway(profile, pathway, model_probabilities=None):
 
     supporting = []
     reducing = []
-    for label, values in (("Subject", subjects), ("Aptitude", aptitude), ("Interest", interests)):
+    for label, values in (("Self-reported subject rating", subjects), ("Aptitude", aptitude), ("Interest", interests)):
         for key, score in values:
             text = f"{label}: {key.replace('_', ' ')} rated {score:.0f}/100"
             (supporting if score >= GUIDANCE_THRESHOLD else reducing).append(text)
@@ -154,16 +183,19 @@ def evaluate_pathway(profile, pathway, model_probabilities=None):
         reducing.append("No relevant scored aptitude domains were supplied.")
     if not interests:
         reducing.append("No relevant interest ratings were supplied.")
+    if profile.get("stream"):
+        reducing.append("Your selected study stream is shown as context and is not counted as a personal-strength assessment.")
 
-    evidence_items = len(subjects) + len(aptitude) + len(interests) + len(preferences)
-    evidence_domains = sum(value is not None for value in dimensions.values())
     return {
         "knowledge_score": knowledge,
         "combined_score": combined,
         "ml_score": ml,
         "components": dimensions,
         "evidence_count": evidence_items,
-        "evidence_domains": evidence_domains,
+        "evidence_domains": assessed_domains,
+        "evidence_coverage": evidence_coverage,
+        "recommendation_type": "personalized" if evidence_sufficient else "provisional",
+        "context": {"selected_stream": profile.get("stream") or None, "suggested_pathway": pathway, "stream_is_scoring_evidence": False},
         "evidence_labels": ["academic subjects", "scored aptitude", "interests", "stated preferences"],
         "why_matches": supporting[:6],
         "factors_to_consider": reducing[:6],
@@ -183,14 +215,15 @@ def summarize_pathways(results):
     evidence_domains = max((item.get("evidence_domains", 0) for item in results), default=0)
     margin = scored[0]["combined_score"] - scored[1]["combined_score"] if len(scored) > 1 else 0
     clear_leader = bool(scored and evidence_items >= 2 and margin >= 12)
-    if not scored or evidence_items < 2:
+    sufficient = evidence_domains >= 2 and evidence_items >= 2
+    if not sufficient:
         summary = "There is not enough assessed information yet to distinguish pathways. Rate relevant subjects and interests, complete the scored aptitude exercise, and discuss local options with a teacher or counselor."
     elif clear_leader:
         summary = f"{scored[0].get('pathway_name', scored[0]['career_name'])} is a provisional leading option to explore from the assessed information. This is not a prediction of success or admission; compare alternatives and local subject availability."
     else:
         summary = "No single pathway stands out clearly from the available evidence. The close compatibility estimates should not be treated as meaningful certainty; compare the listed alternatives and gather more information."
     for result in results:
-        if not scored:
+        if not sufficient or not scored:
             label = "More information needed"
         elif clear_leader and result["career_id"] == scored[0]["career_id"]:
             label = "Provisional leading option to explore"
@@ -201,7 +234,7 @@ def summarize_pathways(results):
         else:
             label = "Explore further if interested"
         result["pathway_fit_label"] = label
-        result["recommendation_guidance"] = {"summary": summary, "is_leader_clear": clear_leader, "score_margin": round(margin, 1), "evidence_count": evidence_items, "evidence_domains": evidence_domains, "score_label": "Exploratory compatibility estimate — not a probability of success or admission", "small_difference_note": "A leading option is shown only with at least two evidence items and a 12-point or larger lead. Otherwise, compare pathways; these scores do not decide your future."}
+        result["recommendation_guidance"] = {"summary": summary, "is_leader_clear": clear_leader, "score_margin": round(margin, 1), "evidence_count": evidence_items, "evidence_domains": evidence_domains, "evidence_coverage": result.get("evidence_coverage"), "score_label": "Exploratory compatibility estimate — not a probability of success or admission", "small_difference_note": "A leading option is shown only with at least two evidence areas, two provided inputs, and a 12-point or larger lead. Otherwise, compare provisional pathway suggestions; these do not decide your future."}
         if not result.get("improvement_suggestions"):
             result["improvement_suggestions"] = [{"skill": "Pathway exploration", "severity": "Informational", "actions": ["Check subject combinations and entry requirements offered by local schools or recognized programs.", "Try a small classroom, club, or project activity linked to this pathway.", "Discuss your interests and questions with a teacher, guardian, or school counselor."]}]
     return sorted(results, key=lambda item: (-(item.get("combined_score") if item.get("combined_score") is not None else -1), item["career_name"]))

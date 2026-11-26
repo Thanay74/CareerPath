@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyAptitudeState, emptyStudentProfile, profileFromSaved } from '../src/studentProfile.js';
+import { academicHistoryForProgramChange, emptyAptitudeState, emptyStudentProfile, profileFromSaved, updateAcademicHistory } from '../src/studentProfile.js';
 import { loadStudentWorkspace } from '../src/studentWorkspace.js';
 
 test('a new account with no saved assessments has unassessed score maps', () => {
@@ -50,17 +50,59 @@ test('missing fields stay absent and real zero remains a scored value', () => {
   assert.equal(profile.employability.teamwork, undefined);
 });
 
+test('academic history hydrates as unknown without inventing subjects or credentials', () => {
+  const profile = profileFromSaved({ education_level: '12th' });
+  assert.deepEqual(profile.academic_history, {
+    study_status: 'unknown', subjects_status: 'unknown', subjects: [], mathematics: 'unknown',
+  });
+});
+
+test('academic history round trips distinct Commerce math and degree history values', () => {
+  const saved = profileFromSaved({ education_level: '12th', academic_history: {
+    study_status: 'completed', subjects_status: 'selected', subjects: ['Accountancy', 'Economics'], mathematics: 'no',
+  } });
+  const reloaded = profileFromSaved(JSON.parse(JSON.stringify(saved)));
+  assert.deepEqual(reloaded.academic_history, saved.academic_history);
+  assert.equal(reloaded.academic_history.mathematics, 'no');
+  const master = profileFromSaved({ education_level: "Master's", academic_history: {
+    study_status: 'current', subjects_status: 'unknown', subjects: [], previous_degree_status: 'provided', previous_degree: 'BCA',
+  } });
+  assert.equal(profileFromSaved(JSON.parse(JSON.stringify(master))).academic_history.previous_degree, 'BCA');
+});
+
+test('changing a Masters program clears its subject facts but preserves the prior Bachelor degree', () => {
+  const profile = profileFromSaved({ education_level: "Master's", academic_history: {
+    study_status: 'current', subjects_status: 'selected', subjects: ['Machine Learning'],
+    previous_degree_status: 'provided', previous_degree: 'BCA',
+  } });
+  assert.deepEqual(academicHistoryForProgramChange(profile), {
+    study_status: 'unknown', subjects_status: 'unknown', subjects: [],
+    previous_degree_status: 'provided', previous_degree: 'BCA',
+  });
+});
+
+test('changing academic-history answers clears contradictory subject selections', () => {
+  const history = { education_level: '12th', academic_history: {
+    subjects_status: 'selected', subjects: ['Mathematics', 'Accountancy'], mathematics: 'yes',
+  } };
+  assert.deepEqual(updateAcademicHistory(history, 'mathematics', 'no').subjects, ['Accountancy']);
+  assert.deepEqual(updateAcademicHistory(history, 'subjects_status', 'not_applicable').subjects, []);
+});
+
 test('workspace hydration uses only the authenticated student ID and bearer token', async () => {
   const calls = [];
   const workspace = await loadStudentWorkspace('/api', { student_id: 'STU000002', token: 'token-b' }, async (url, options) => {
     calls.push([url, options.headers.Authorization]);
     if (url.includes('/student/profile')) return { ok: true, json: async () => ({ profile: { education_level: '10th', technical: { python: 20 } } }) };
+    if (url.includes('/recommendations')) return { ok: true, json: async () => ({ freshness: 'none', recommendations: [] }) };
     return { ok: true, json: async () => ({ attempts: [] }) };
   });
   assert.deepEqual(calls, [
     ['/api/student/profile?student_id=STU000002', 'Bearer token-b'],
+    ['/api/recommendations?student_id=STU000002', 'Bearer token-b'],
     ['/api/aptitude/history?student_id=STU000002', 'Bearer token-b'],
   ]);
   assert.deepEqual(workspace.profile.technical, { python: 20 });
   assert.equal(workspace.aptitude.phase, 'idle');
+  assert.deepEqual(workspace.recommendationState, { freshness: 'none', recommendations: [], snapshot: undefined, message: '' });
 });

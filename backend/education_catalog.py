@@ -7,11 +7,12 @@ EDUCATION_CATALOG = {
         "subjects": {"default": ["mathematics", "science", "english", "social_science", "computer_science"]},
     },
     "12th": {
-        "streams": ["Science PCB", "Science PCM", "Commerce", "Arts/Humanities", "Vocational/Diploma"],
+        "streams": ["Science PCB", "Science PCM", "Science PCMB", "Commerce", "Arts/Humanities", "Vocational/Diploma"],
         "degrees": [], "specializations": {},
         "subjects": {
             "Science PCB": ["physics", "chemistry", "biology", "english"],
             "Science PCM": ["physics", "chemistry", "mathematics", "english"],
+            "Science PCMB": ["physics", "chemistry", "mathematics", "biology", "english"],
             "Commerce": ["accountancy", "business_studies", "economics", "mathematics", "english"],
             "Arts/Humanities": ["history", "geography", "political_science", "sociology", "english"],
             "Vocational/Diploma": ["mathematics", "computer_science", "business_studies", "english"],

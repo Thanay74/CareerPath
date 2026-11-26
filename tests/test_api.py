@@ -1,11 +1,24 @@
 import os, tempfile, unittest, shutil, json, threading
 from pathlib import Path
 from unittest.mock import patch
-from backend import app as application
+from api_test_safety import (
+    PROCESS_TEMP_ROOT,
+    application,
+    assert_isolated_sqlite,
+    capture_database_configuration,
+    configure_isolated_database,
+    initialize_and_seed_isolated_database,
+    restore_database_configuration,
+)
 
 class ApiTests(unittest.TestCase):
     def setUp(self):
-        self.tmp=tempfile.TemporaryDirectory(); application.DB_PATH=Path(self.tmp.name)/'test.sqlite3'
+        self.tmp=tempfile.TemporaryDirectory(dir=PROCESS_TEMP_ROOT)
+        self.addCleanup(self.tmp.cleanup)
+        self.database_config=capture_database_configuration(application)
+        self.addCleanup(restore_database_configuration,application,self.database_config)
+        self.database_path=Path(self.tmp.name)/'test.sqlite3'
+        configure_isolated_database(application,self.database_path,self.tmp.name)
         from backend.services import recommendation_engine
         self.original_kb=recommendation_engine.KB; self.original_metadata=recommendation_engine.METADATA
         recommendation_engine.KB=Path(self.tmp.name)/'careers.csv'; shutil.copyfile(self.original_kb,recommendation_engine.KB)
@@ -13,9 +26,10 @@ class ApiTests(unittest.TestCase):
         from backend.services import catalog_releases
         self.release_config=(catalog_releases.RELEASES_DIR,catalog_releases.ACTIVE_MANIFEST,catalog_releases.MANAGED_MARKER,catalog_releases.ACTIVATION_LOCK)
         catalog_releases.RELEASES_DIR=Path(self.tmp.name)/'releases'; catalog_releases.ACTIVE_MANIFEST=Path(self.tmp.name)/'active.json'; catalog_releases.MANAGED_MARKER=Path(self.tmp.name)/'managed.json'; catalog_releases.ACTIVATION_LOCK=Path(self.tmp.name)/'activation.lock'
-        application.init_db()
-        conn=application.connect_db()
-        application.seed_education_catalog(conn); application.seed_aptitude_questions(conn); conn.commit(); conn.close()
+        initialize_and_seed_isolated_database(
+            application,self.tmp.name,
+            (application.seed_education_catalog,application.seed_aptitude_questions),
+        )
         self.original_drafts=application.CAREER_DRAFT_DIR; application.CAREER_DRAFT_DIR=Path(self.tmp.name)/'drafts'
         self.client=application.app.test_client()
     def tearDown(self):
@@ -24,7 +38,6 @@ class ApiTests(unittest.TestCase):
         recommendation_engine.KB=self.original_kb; recommendation_engine.METADATA=self.original_metadata
         catalog_releases.RELEASES_DIR,catalog_releases.ACTIVE_MANIFEST,catalog_releases.MANAGED_MARKER,catalog_releases.ACTIVATION_LOCK=self.release_config
         application.CAREER_DRAFT_DIR=self.original_drafts
-        self.tmp.cleanup()
     def test_registration_login_and_invalid_input(self):
         r=self.client.post('/api/register',json={'email':'student@example.com','password':'password123'}); self.assertEqual(r.status_code,201); data=r.get_json()
         login=self.client.post('/api/login',json={'email':'student@example.com','password':'password123'}); self.assertEqual(login.status_code,200)
@@ -63,6 +76,47 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.client.get('/api/skill-gap?student_id='+sid,headers=headers).status_code,200)
         self.assertEqual(self.client.get('/api/improvement-plan?student_id='+sid,headers=headers).status_code,200)
         self.assertEqual(self.client.get('/api/career/C01').status_code,200)
+    def test_education_skill_catalog_and_custom_skill_round_trip(self):
+        commerce=self.client.get('/api/education/skills?education_level=Bachelor%27s&stream=Commerce&degree=B.Com&specialization=Finance').get_json()['catalog']
+        self.assertIn('accounting',{row['key'] for row in commerce['domain_skills']})
+        self.assertIn('python',{row['key'] for row in commerce['advanced_self_acquired_skills']})
+        self.assertIn('not curriculum requirements',commerce['notice'])
+        reg=self.client.post('/api/register',json={'email':'skill-roundtrip@example.com','password':'password123'}).get_json()
+        sid=reg['student_id']; headers={'Authorization':'Bearer '+reg['token']}
+        custom={'display_name':'Python programming','category':'technical','applicability':'assessed','proficiency':77,'source_context':'self_learning','is_custom':True}
+        saved=self.client.post('/api/assessment/skills',json={'student_id':sid,'technical':{},'employability':{},'skill_assessments':[custom]},headers=headers)
+        self.assertEqual(saved.status_code,200)
+        profile=self.client.get('/api/student/profile?student_id='+sid,headers=headers).get_json()['profile']
+        self.assertNotIn('python',profile['technical'])
+        self.assertEqual(profile['skill_assessments'][0]['display_name'],'Python programming')
+        self.assertEqual(profile['skill_assessments'][0]['canonical_skill'],'python')
+        self.assertEqual(profile['skill_assessments'][0]['proficiency'],77)
+        self.assertEqual(profile['skill_assessments'][0]['source_context'],'self_learning')
+        duplicate={'student_id':sid,'technical':{},'employability':{},'skill_assessments':[custom,{**custom,'display_name':'python programming'}]}
+        self.assertEqual(self.client.post('/api/assessment/skills',json=duplicate,headers=headers).status_code,400)
+        profile_after_rejection=self.client.get('/api/student/profile?student_id='+sid,headers=headers).get_json()['profile']
+        self.assertEqual(profile_after_rejection['skill_assessments'][0]['proficiency'],77)
+        not_applicable={'skill_key':'python','display_name':'Python','category':'technical','applicability':'not_applicable','is_custom':False}
+        self.assertEqual(self.client.post('/api/assessment/skills',json={'student_id':sid,'technical':{},'employability':{},'skill_assessments':[not_applicable]},headers=headers).status_code,200)
+        final=self.client.get('/api/student/profile?student_id='+sid,headers=headers).get_json()['profile']
+        self.assertNotIn('python',final['technical'])
+        self.assertEqual(final['skill_assessments'][0]['applicability'],'not_applicable')
+        labeled_not_applicable={'skill_key':'tally','display_name':'Tally / accounting software','category':'technical','applicability':'not_applicable','canonical_skill':'tally','is_custom':False}
+        accepted=self.client.post('/api/assessment/skills',json={'student_id':sid,'technical':{},'employability':{},'skill_assessments':[labeled_not_applicable]},headers=headers)
+        self.assertEqual(accepted.status_code,200,accepted.get_json())
+        saved_labeled=self.client.get('/api/student/profile?student_id='+sid,headers=headers).get_json()['profile']
+        self.assertEqual(saved_labeled['skill_assessments'][0]['canonical_skill'],'tally')
+        mismatched_key={**labeled_not_applicable,'skill_key':'excel'}
+        rejected=self.client.post('/api/assessment/skills',json={'student_id':sid,'technical':{},'employability':{},'skill_assessments':[mismatched_key]},headers=headers)
+        self.assertEqual(rejected.status_code,400)
+        mismatched_canonical={**labeled_not_applicable,'canonical_skill':'excel'}
+        rejected_mapping=self.client.post('/api/assessment/skills',json={'student_id':sid,'technical':{},'employability':{},'skill_assessments':[mismatched_canonical]},headers=headers)
+        self.assertEqual(rejected_mapping.status_code,400)
+        unchanged=self.client.get('/api/student/profile?student_id='+sid,headers=headers).get_json()['profile']
+        self.assertEqual(unchanged['skill_assessments'][0]['canonical_skill'],'tally')
+    def test_education_skill_catalog_rejects_unknown_stage(self):
+        response=self.client.get('/api/education/skills?education_level=Doctorate')
+        self.assertEqual(response.status_code,400)
     def test_recommend_rejects_missing_invalid_expired_and_other_student_tokens(self):
         first=self.client.post('/api/register',json={'email':'recommend-owner@example.com','password':'password123'}).get_json()
         second=self.client.post('/api/register',json={'email':'recommend-other@example.com','password':'password123'}).get_json()
@@ -98,6 +152,67 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(missing_token.status_code,401)
         with self.client.application.app_context():
             self.assertEqual(application.db().execute('SELECT COUNT(*) AS n FROM aptitude_attempts WHERE student_id=?',(owner['student_id'],)).fetchone()['n'],0)
+    def test_recommendation_snapshots_restore_only_for_matching_profile_and_catalog(self):
+        from backend.recommendation_snapshots import decode_history
+        owner=self.client.post('/api/register',json={'email':'snapshot-owner@example.com','password':'password123'}).get_json()
+        other=self.client.post('/api/register',json={'email':'snapshot-other@example.com','password':'password123'}).get_json()
+        headers={'Authorization':'Bearer '+owner['token']}; sid=owner['student_id']
+        profile={'student_id':sid,'education_level':'10th','stream':'Science','subjects':{'mathematics':None}}
+        self.assertEqual(self.client.post('/api/student/profile',json=profile,headers=headers).status_code,200)
+        generated=self.client.post('/api/recommend',json={'student_id':sid,'top_n':3},headers=headers)
+        self.assertEqual(generated.status_code,200,generated.get_json())
+        body=generated.get_json()
+        self.assertEqual(body['freshness'],'current')
+        self.assertEqual(len(body['snapshot']['input_fingerprint']),64)
+        self.assertNotIn('profile',body['snapshot'])
+        restored=self.client.get('/api/recommendations?student_id='+sid,headers=headers)
+        self.assertEqual(restored.status_code,200)
+        self.assertEqual(restored.get_json()['freshness'],'current')
+        self.assertEqual(restored.get_json()['recommendations'],body['recommendations'])
+        self.assertEqual(self.client.get('/api/recommendations?student_id='+sid,headers={'Authorization':'Bearer '+other['token']}).status_code,403)
+        self.assertEqual(self.client.get('/api/recommendations?student_id='+sid).status_code,401)
+
+        changed={**profile,'education_level':'12th','stream':'Science PCM','subjects':{'mathematics':0}}
+        self.assertEqual(self.client.post('/api/student/profile',json=changed,headers=headers).status_code,200)
+        stale=self.client.get('/api/recommendations?student_id='+sid,headers=headers).get_json()
+        self.assertEqual(stale['freshness'],'stale')
+        self.assertEqual(stale['recommendations'],[])
+        self.assertEqual(self.client.get('/api/skill-gap?student_id='+sid,headers=headers).status_code,404)
+
+        self.assertEqual(self.client.post('/api/student/profile',json=profile,headers=headers).status_code,200)
+        second_run=self.client.post('/api/recommend',json={'student_id':sid,'top_n':3},headers=headers)
+        self.assertEqual(second_run.status_code,200,second_run.get_json())
+        self.assertEqual(self.client.get('/api/recommendations?student_id='+sid,headers=headers).get_json()['freshness'],'current')
+        with self.client.application.app_context():
+            value=application.db().execute('SELECT results_json FROM recommendations WHERE student_id=?',(sid,)).fetchone()['results_json']
+            history,legacy=decode_history(value)
+            self.assertFalse(legacy)
+            self.assertEqual(len(history['snapshots']),2)
+        changed_history={**profile,'academic_history':{'study_status':'completed','subjects_status':'selected','subjects':['Mathematics']}}
+        self.assertEqual(self.client.post('/api/student/profile',json=changed_history,headers=headers).status_code,200)
+        history_stale=self.client.get('/api/recommendations?student_id='+sid,headers=headers).get_json()
+        self.assertEqual(history_stale['freshness'],'stale')
+        self.assertEqual(history_stale['recommendations'],[])
+
+    def test_legacy_recommendation_json_is_unverified_and_preserved_on_new_run(self):
+        from backend.recommendation_snapshots import decode_history
+        owner=self.client.post('/api/register',json={'email':'snapshot-legacy@example.com','password':'password123'}).get_json()
+        headers={'Authorization':'Bearer '+owner['token']}; sid=owner['student_id']
+        legacy=[{'career_name':'Legacy result','compatibility_score':99}]
+        with self.client.application.app_context():
+            application.db().execute('INSERT INTO recommendations(student_id,results_json) VALUES(?,?)',(sid,json.dumps(legacy)))
+            application.db().commit()
+        result=self.client.get('/api/recommendations?student_id='+sid,headers=headers).get_json()
+        self.assertEqual(result['freshness'],'unverified')
+        self.assertEqual(result['recommendations'],[])
+        response=self.client.post('/api/recommend',json={'student_id':sid},headers=headers)
+        self.assertEqual(response.status_code,200,response.get_json())
+        with self.client.application.app_context():
+            value=application.db().execute('SELECT results_json FROM recommendations WHERE student_id=?',(sid,)).fetchone()['results_json']
+            history,legacy_flag=decode_history(value)
+            self.assertFalse(legacy_flag)
+            self.assertEqual(history['legacy_records'],[legacy])
+            self.assertEqual(len(history['snapshots']),1)
     def test_profile_and_aptitude_history_are_scoped_to_authenticated_student(self):
         first=self.client.post('/api/register',json={'email':'profile-scope-a@example.com','password':'password123'}).get_json()
         second=self.client.post('/api/register',json={'email':'profile-scope-b@example.com','password':'password123'}).get_json()
@@ -200,6 +315,57 @@ class ApiTests(unittest.TestCase):
         after_login=self.client.get('/api/aptitude/attempts/%s?student_id=%s'%(attempt['attempt_id'],sid),headers=relogin_headers)
         self.assertEqual(after_login.status_code,200); self.assertEqual(after_login.get_json()['attempt']['overall_score'],100)
         self.assertEqual(self.client.post('/api/aptitude/attempts/%s/submit'%attempt['attempt_id'],json={'student_id':sid,'answers':answers},headers=headers).status_code,409)
+    def test_aptitude_fixture_seed_is_repeatable_active_and_preserves_attempt_history(self):
+        from backend.aptitude_bank import LEVELS, QUESTIONS
+        reg=self.client.post('/api/register',json={'email':'aptitude-seed-repeat@example.com','password':'password123'}).get_json()
+        headers={'Authorization':'Bearer '+reg['token']}; sid=reg['student_id']
+        profile={'student_id':sid,'education_level':'10th','stream':'Science','subjects':{}}
+        self.assertEqual(self.client.post('/api/student/profile',json=profile,headers=headers).status_code,200)
+        started=self.client.post('/api/aptitude/attempts',json={'student_id':sid,'education_level':'10th'},headers=headers)
+        self.assertEqual(started.status_code,201,started.get_json())
+        attempt=started.get_json()
+        answers={question['question_id']:question['correct_option'] for question in QUESTIONS}
+        submitted=self.client.post('/api/aptitude/attempts/%s/submit'%attempt['attempt_id'],json={'student_id':sid,'answers':answers},headers=headers)
+        self.assertEqual(submitted.status_code,200,submitted.get_json())
+        before_counts={}
+        with self.client.application.app_context():
+            connection=application.db()
+            for table in ('aptitude_attempts','aptitude_attempt_questions','aptitude_responses','aptitude_domain_scores'):
+                before_counts[table]=connection.execute('SELECT COUNT(*) AS n FROM '+table).fetchone()['n']
+            connection.execute("UPDATE aptitude_questions SET is_active=0 WHERE question_id='APT001'")
+            connection.commit()
+            application.seed_aptitude_questions(connection)
+            application.seed_aptitude_questions(connection)
+            connection.commit()
+            rows=connection.execute('SELECT question_id,education_levels_json,is_active FROM aptitude_questions ORDER BY question_id').fetchall()
+            after_counts={table:connection.execute('SELECT COUNT(*) AS n FROM '+table).fetchone()['n'] for table in before_counts}
+        self.assertEqual(len(rows),len(QUESTIONS))
+        self.assertEqual({row['question_id'] for row in rows},{question['question_id'] for question in QUESTIONS})
+        self.assertTrue(all(row['is_active'] for row in rows))
+        self.assertTrue(all(json.loads(row['education_levels_json'])==LEVELS for row in rows))
+        self.assertEqual(after_counts,before_counts)
+        for level in LEVELS:
+            response=self.client.get('/api/aptitude/questions',query_string={'education_level':level})
+            self.assertEqual(response.status_code,200)
+            self.assertEqual(response.get_json()['question_count'],len(QUESTIONS))
+            self.assertEqual({question['question_id'] for question in response.get_json()['questions']},{question['question_id'] for question in QUESTIONS})
+        loaded=self.client.get('/api/aptitude/attempts/%s?student_id=%s'%(attempt['attempt_id'],sid),headers=headers)
+        self.assertEqual(loaded.status_code,200)
+        self.assertEqual(loaded.get_json()['attempt']['status'],'completed')
+        self.assertEqual(len(loaded.get_json()['attempt']['responses']),len(QUESTIONS))
+    def test_empty_aptitude_question_bank_does_not_create_an_attempt(self):
+        reg=self.client.post('/api/register',json={'email':'aptitude-empty@example.com','password':'password123'}).get_json()
+        headers={'Authorization':'Bearer '+reg['token']}
+        with self.client.application.app_context():
+            application.db().execute('UPDATE aptitude_questions SET is_active=0')
+            application.db().commit()
+        response=self.client.post('/api/aptitude/attempts',json={'student_id':reg['student_id'],'education_level':'10th'},headers=headers)
+        self.assertEqual(response.status_code,409)
+        self.assertEqual(response.get_json()['code'],'APTITUDE_QUESTION_BANK_EMPTY')
+        self.assertIn('No attempt was created',response.get_json()['error'])
+        with self.client.application.app_context():
+            count=application.db().execute('SELECT COUNT(*) AS n FROM aptitude_attempts WHERE student_id=?',(reg['student_id'],)).fetchone()['n']
+        self.assertEqual(count,0)
     def test_mysql_adapter_uses_named_rows_and_mysql_placeholders(self):
         class Cursor:
             rowcount=1; lastrowid=7
@@ -460,5 +626,76 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(pointer['release_id'],first_release['release_id'])
         from backend.services.recommendation_engine import career_detail
         self.assertEqual(career_detail('C01')['description'],'First isolated release')
+
+    def test_academic_history_combinations_persist_through_profile_api(self):
+        reg=self.client.post('/api/register',json={'email':'academic-history@example.com','password':'password123'}).get_json()
+        headers={'Authorization':'Bearer '+reg['token']}; sid=reg['student_id']
+        cases=[
+            ('10th','Science',None,{'board':'CBSE','study_status':'completed','subjects_status':'selected','subjects':['Mathematics','Science']}),
+            ('12th','Commerce',None,{'subjects_status':'selected','subjects':['Mathematics','Accountancy'],'mathematics':'yes'}),
+            ('12th','Commerce',None,{'subjects_status':'selected','subjects':['Accountancy','Economics'],'mathematics':'no'}),
+            ('12th','Science PCM',None,{'subjects_status':'selected','subjects':['Physics','Chemistry','Mathematics'],'mathematics':'yes'}),
+            ('12th','Science PCB',None,{'subjects_status':'selected','subjects':['Physics','Chemistry','Biology'],'mathematics':'no'}),
+            ('12th','Arts/Humanities',None,{'subjects_status':'selected','subjects':['History','Political Science'],'mathematics':'unknown'}),
+            ("Bachelor's",'Science','BCA',{'major':'Computer Applications','study_status':'current','subjects_status':'selected','subjects':['Programming','Databases']}),
+            ("Bachelor's",'Commerce','B.Com',{'major':'Accounting','study_status':'completed','subjects_status':'selected','subjects':['Accounting','Economics']}),
+            ("Bachelor's",'Science','B.Sc',{'major':'Computer Science','subjects_status':'selected','subjects':['Algorithms']}),
+            ("Bachelor's",'Science','B.Sc',{'major':'Biology','subjects_status':'unknown','subjects':[]}),
+            ("Master's",'Computing','MCA',{'previous_degree_status':'provided','previous_degree':'BCA'}),
+            ("Master's",'Science','M.Sc',{'previous_degree_status':'provided','previous_degree':'B.Sc Mathematics'}),
+            ("Master's",'Commerce','M.Com',{'previous_degree_status':'provided','previous_degree':'B.Com'}),
+            ("Master's",'Business','MBA',{'previous_degree_status':'provided','previous_degree':'BBA'}),
+        ]
+        for level,stream,degree,history in cases:
+            with self.subTest(level=level,stream=stream,degree=degree):
+                response=self.client.post('/api/student/profile',json={
+                    'student_id':sid,'education_level':level,'stream':stream,'degree':degree or '',
+                    'specialization':'Computer Applications' if degree=='BCA' else 'Accounting' if degree=='B.Com' else 'Computer Science' if degree=='B.Sc' and history.get('major')=='Computer Science' else 'Biology' if degree=='B.Sc' else 'Cybersecurity' if degree=='MCA' else 'Mathematics' if degree=='M.Sc' else 'Finance' if degree in ('M.Com','MBA') else '',
+                    'academic_history':history,'subjects':{},
+                },headers=headers)
+                self.assertEqual(response.status_code,200,response.get_json())
+                loaded=self.client.get('/api/student/profile',query_string={'student_id':sid},headers=headers)
+                self.assertEqual(loaded.status_code,200)
+                saved=loaded.get_json()['profile']
+                self.assertEqual(saved['education_level'],level)
+                self.assertEqual(saved['academic_history']['subjects_status'],history.get('subjects_status','unknown'))
+                if 'mathematics' in history:
+                    self.assertEqual(saved['academic_history']['mathematics'],history['mathematics'])
+                if 'previous_degree' in history:
+                    self.assertEqual(saved['academic_history']['previous_degree'],history['previous_degree'])
+
+    def test_invalid_academic_history_is_rejected_without_replacing_saved_profile(self):
+        reg=self.client.post('/api/register',json={'email':'invalid-academic-history@example.com','password':'password123'}).get_json()
+        headers={'Authorization':'Bearer '+reg['token']}; sid=reg['student_id']
+        good={'student_id':sid,'education_level':'12th','stream':'Commerce','academic_history':{'subjects_status':'selected','subjects':['Mathematics','Accountancy'],'mathematics':'yes'}}
+        self.assertEqual(self.client.post('/api/student/profile',json=good,headers=headers).status_code,200)
+        bad={**good,'academic_history':{'subjects_status':'selected','subjects':['Accountancy'],'mathematics':'no','board':{'bad':'type'}}}
+        self.assertEqual(self.client.post('/api/student/profile',json=bad,headers=headers).status_code,400)
+        loaded=self.client.get('/api/student/profile',query_string={'student_id':sid},headers=headers).get_json()['profile']
+        self.assertEqual(loaded['academic_history']['mathematics'],'yes')
+        self.assertEqual(loaded['academic_history']['subjects'],['Mathematics','Accountancy'])
+
+    def test_existing_sqlite_student_rows_survive_additive_academic_history_upgrade(self):
+        import sqlite3
+        old_config=capture_database_configuration(application)
+        with tempfile.TemporaryDirectory(dir=PROCESS_TEMP_ROOT) as temp:
+            db_path=Path(temp)/'existing.sqlite3'
+            configure_isolated_database(application,db_path,temp)
+            assert_isolated_sqlite(application,temp)
+            conn=sqlite3.connect(db_path)
+            conn.executescript("CREATE TABLE users(user_id INTEGER PRIMARY KEY,email TEXT UNIQUE NOT NULL,password_hash TEXT NOT NULL,token TEXT UNIQUE,role TEXT NOT NULL DEFAULT 'student',is_active INTEGER NOT NULL DEFAULT 1,created_at TEXT DEFAULT CURRENT_TIMESTAMP); CREATE TABLE students(student_id TEXT PRIMARY KEY,user_id INTEGER UNIQUE,education_level TEXT NOT NULL,age INTEGER,gender TEXT,stream TEXT,degree TEXT,specialization TEXT,study_period TEXT,academic_performance REAL,academic_scale TEXT NOT NULL DEFAULT 'percentage',research_interests TEXT,career_preferences TEXT,profile_updated_at TEXT,FOREIGN KEY(user_id) REFERENCES users(user_id)); INSERT INTO users(user_id,email,password_hash) VALUES(1,'preserved@example.com','hash'); INSERT INTO students(student_id,user_id,education_level,stream) VALUES('STU000001',1,'12th','Commerce');")
+            conn.commit(); conn.close()
+            try:
+                assert_isolated_sqlite(application,temp)
+                application.init_db()
+                assert_isolated_sqlite(application,temp)
+                conn=sqlite3.connect(db_path)
+                columns={row[1] for row in conn.execute('PRAGMA table_info(students)')}
+                preserved=conn.execute('SELECT email,education_level,stream FROM users JOIN students USING(user_id) WHERE student_id=?',('STU000001',)).fetchone()
+                conn.close()
+                self.assertIn('academic_history',columns)
+                self.assertEqual(preserved,('preserved@example.com','12th','Commerce'))
+            finally:
+                restore_database_configuration(application,old_config)
 
 if __name__=='__main__': unittest.main()

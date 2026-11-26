@@ -16,3 +16,11 @@ test('recommendations are hidden when the session or submitted profile is stale'
   assert.equal(recommendationView({ ...common, resultToken: 'token', activeToken: 'token', activeProfile: profileSnapshot({ ...profile, education_level: '10th' }) }), 'empty');
   assert.equal(recommendationView({ ...common, resultToken: 'token', activeToken: 'token' }), 'results');
 });
+
+test('academic-history changes make a previously saved recommendation stale', () => {
+  const saved = profileSnapshot({ ...profile, academic_history: { mathematics: 'yes', subjects: ['Mathematics'] } });
+  const active = profileSnapshot({ ...profile, academic_history: { mathematics: 'no', subjects: ['Accountancy'] } });
+  assert.notEqual(saved, active);
+  assert.equal(recommendationView({ authenticated: true, promptRequested: false, resultCount: 2,
+    resultToken: 'same', activeToken: 'same', resultProfile: saved, activeProfile: active }), 'empty');
+});
